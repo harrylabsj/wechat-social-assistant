@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local build artifacts
+bin/
+
+# Private local memory and generated reports
+data/
+reports/
