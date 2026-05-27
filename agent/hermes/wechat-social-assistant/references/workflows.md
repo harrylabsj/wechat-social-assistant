@@ -3,11 +3,20 @@
 ## Daily Review
 
 1. Run `wsa status`.
-2. Run `wsa dashboard` for the operating view.
-3. Run `wsa next` for the top follow-up when the user wants a single draft.
-4. If the user says the suggestion is done, irrelevant, too pushy, or useful, record that with `wsa feedback NAME ACTION` after confirmation.
-5. If the user asks for broader planning, run `wsa analyze` after confirmation.
-6. Read `reports/outreach.md` and `reports/contact-profiles.md`.
+2. Run `wsa audit` if the user asks what local data exists.
+3. Run `wsa dashboard` for the operating view.
+4. Run `wsa next` for the top follow-up when the user wants a single draft.
+5. If the user says the suggestion is done, irrelevant, too pushy, or useful, record that with `wsa feedback NAME ACTION` after confirmation.
+6. If the user asks for broader planning, run `wsa analyze` after confirmation.
+7. Read `reports/outreach.md` and `reports/contact-profiles.md`.
+
+## Data Audit, Export, And Delete
+
+1. Run `wsa audit` to inspect table counts and local paths.
+2. To back up or migrate, confirm the output path and run `wsa export-data --out PATH --yes`.
+3. To delete one contact, run `wsa delete-contact NAME --dry-run` first.
+4. If the impact is expected, run `wsa delete-contact NAME --yes`.
+5. Re-run `wsa audit` to verify counts changed as expected.
 
 ## Contact Lookup
 

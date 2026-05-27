@@ -9,6 +9,7 @@ from pathlib import Path
 
 READ_COMMANDS = {
     "status",
+    "audit",
     "contacts",
     "feedback-list",
     "brief",
@@ -34,6 +35,8 @@ WRITE_COMMANDS = {
     "import-source",
     "feedback",
     "candidate-confirm",
+    "export-data",
+    "delete-contact",
     "watch",
     "stop-watch",
     "stop",

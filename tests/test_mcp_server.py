@@ -18,6 +18,7 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual(
             [
                 "get_status",
+                "get_audit_report",
                 "search_contacts",
                 "get_contact_brief",
                 "get_next_followup",
@@ -97,6 +98,7 @@ class MCPServerContractTests(unittest.TestCase):
             _seed_relationship_data(db_path)
 
             status = _call_tool("get_status", db_path=db_path, captures_dir=captures_dir)
+            audit = _call_tool("get_audit_report", db_path=db_path)
             search = _call_tool("search_contacts", db_path=db_path, query="张三")
             brief = _call_tool("get_contact_brief", db_path=db_path, contact_name="张三")
             followup = _call_tool("get_next_followup", db_path=db_path, contact_name="张三", min_score=0)
@@ -110,6 +112,8 @@ class MCPServerContractTests(unittest.TestCase):
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
+        self.assertIn("audit", audit["structuredContent"])
+        self.assertIn("# 本地数据审计", audit["content"][0]["text"])
         self.assertEqual(1, status["structuredContent"]["screenshot_count"])
         self.assertEqual("张三", search["structuredContent"]["contacts"][0]["name"])
         self.assertIn("增长交流群（3）", search["structuredContent"]["contacts"][0]["source_chats"])
@@ -147,6 +151,14 @@ class MCPServerContractTests(unittest.TestCase):
                     "params": {"uri": "wsa://status", "arguments": {"db_path": str(db_path)}},
                 }
             )
+            audit = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "resources/read",
+                    "params": {"uri": "wsa://audit", "arguments": {"db_path": str(db_path)}},
+                }
+            )
             prompt = mcp_server.handle_jsonrpc(
                 {
                     "jsonrpc": "2.0",
@@ -176,6 +188,8 @@ class MCPServerContractTests(unittest.TestCase):
             )
 
         self.assertEqual("wsa://status", status["result"]["contents"][0]["uri"])
+        self.assertEqual("wsa://audit", audit["result"]["contents"][0]["uri"])
+        self.assertIn("# 本地数据审计", audit["result"]["contents"][0]["text"])
         self.assertIn("# WeChat Social Assistant Status", status["result"]["contents"][0]["text"])
         self.assertIn("张三", prompt["result"]["messages"][0]["content"]["text"])
         self.assertIn("只读", prompt["result"]["messages"][0]["content"]["text"])

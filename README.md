@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.9）
+## Agent 生态（v1.0）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.9 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库，以及本地多入口关系来源导入。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.0 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库、本地多入口关系来源导入，以及本地数据审计、导出和按联系人删除。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.9 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v1.0 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -178,6 +178,17 @@ python3 -m wsa.cli status
 ```
 
 `status` 会汇总数据库、原始联系人数量、联系人档案数量、采集数量、按当前规则即时计算的关系信号数量、截图数量、首要跟进对象及强度、自动截图是否仍在运行、质量提示、最近一次采集和 `watch.log` 的最后一行。联系人档案数量会包含从群聊里识别出来的发言人，适合在暂停自动截图后快速判断这轮记录了什么；最近一次采集会使用 `YYYY-MM-DD HH:MM` 这种短时间格式。如果没有 45 分以上的跟进建议，但存在低强度草稿，`top followup` 会显示最高低分建议，并提示用 `suggest --min-score 0` 查看低分草稿，而不是只写 `none`。
+
+审计、导出和删除本地数据：
+
+```bash
+python3 -m wsa.cli audit
+python3 -m wsa.cli export-data --out ./wsa-export.json --yes
+python3 -m wsa.cli delete-contact 张三 --dry-run
+python3 -m wsa.cli delete-contact 张三 --yes
+```
+
+`audit` 只读输出本地表计数和路径；`export-data` 写出本地 JSON 快照，必须带 `--yes`；`delete-contact` 只删除一个联系人相关的本地记录，建议先 `--dry-run` 看影响面，再用 `--yes` 执行。
 
 一键分析并生成报告：
 

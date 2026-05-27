@@ -8,6 +8,7 @@ import sys
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .audit import audit_report_to_dict, build_audit_report, render_audit_report_markdown
 from .cli import (
     _best_hidden_suggestion,
     _brief_display_evidence,
@@ -58,7 +59,7 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "1.0.0"
 
 MCP_TOOLS = [
     {
@@ -70,6 +71,17 @@ MCP_TOOLS = [
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
                 "captures_dir": {"type": "string", "description": "Optional screenshot directory."},
                 "log_file": {"type": "string", "description": "Optional watch log path."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_audit_report",
+        "description": "Read a local data audit report with table counts and storage paths.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
             },
             "additionalProperties": False,
         },
@@ -289,6 +301,12 @@ MCP_RESOURCES = [
         "mimeType": "text/markdown",
     },
     {
+        "uri": "wsa://audit",
+        "name": "WSA audit",
+        "description": "Local data audit with table counts and storage paths.",
+        "mimeType": "text/markdown",
+    },
+    {
         "uri": "wsa://contacts",
         "name": "WSA contacts",
         "description": "Contact-centered relationship profiles from existing local captures.",
@@ -457,6 +475,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("tools/call arguments must be an object")
     handlers = {
         "get_status": _tool_get_status,
+        "get_audit_report": _tool_get_audit_report,
         "search_contacts": _tool_search_contacts,
         "get_contact_brief": _tool_get_contact_brief,
         "get_next_followup": _tool_get_next_followup,
@@ -493,6 +512,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
 
     if normalized_uri == "wsa://status":
         tool_result = _tool_get_status(merged_arguments)
+    elif normalized_uri == "wsa://audit":
+        tool_result = _tool_get_audit_report(merged_arguments)
     elif normalized_uri == "wsa://contacts":
         tool_result = _tool_search_contacts(merged_arguments)
     elif normalized_uri == "wsa://daily-report":
@@ -579,6 +600,14 @@ def _tool_get_status(arguments: dict[str, Any]) -> dict[str, Any]:
         captures_dir=_optional_path(arguments.get("captures_dir")),
     )
     return _tool_result(render_status_report(report), _status_to_dict(report))
+
+
+def _tool_get_audit_report(arguments: dict[str, Any]) -> dict[str, Any]:
+    report = build_audit_report(_db_path(arguments))
+    return _tool_result(
+        render_audit_report_markdown(report),
+        {"audit": audit_report_to_dict(report)},
+    )
 
 
 def _tool_search_contacts(arguments: dict[str, Any]) -> dict[str, Any]:

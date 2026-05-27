@@ -3,6 +3,7 @@
 __all__ = [
     "parser",
     "store",
+    "audit",
     "suggestions",
     "ocr",
     "mcp_server",

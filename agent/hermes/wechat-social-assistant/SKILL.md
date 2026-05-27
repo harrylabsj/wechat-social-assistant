@@ -1,6 +1,6 @@
 ---
 name: wechat-social-assistant
-description: "Use when the user wants a local-first WeChat relationship memory assistant: inspect wsa status, search contacts, summarize a contact, review the relationship dashboard or quality layer, discover group/event relationship candidates, review weekly reports, import local relationship sources, import/export Obsidian relationship notes, record local feedback, draft follow-ups, use the MCP server, analyze recent visible WeChat captures, import screenshots, or run/stop explicit watch mode."
+description: "Use when the user wants a local-first WeChat relationship memory assistant: inspect wsa status or audit data, search contacts, summarize a contact, review the relationship dashboard or quality layer, discover group/event relationship candidates, review weekly reports, import local relationship sources, export/delete local data, import/export Obsidian relationship notes, record local feedback, draft follow-ups, use the MCP server, analyze recent visible WeChat captures, import screenshots, or run/stop explicit watch mode."
 ---
 
 # WeChat Social Assistant
@@ -12,9 +12,9 @@ Use this skill when the user asks to work with `wechat-social-assistant`, `wsa`,
 - Never send WeChat messages automatically.
 - Do not read or modify WeChat's private databases.
 - Do not bypass platform protections, inject into WeChat, or scrape encrypted stores.
-- Treat `watch`, `capture`, `import-image`, `ingest`, `feedback`, `candidate-confirm`, `candidates --sync`, `import-obsidian`, `import-source`, `analyze`, `export-obsidian`, `reset`, and `stop-watch` as write or process-control actions; explain the effect and get explicit user confirmation before running them.
-- The MCP server is mostly read-only in v0.9. `record_feedback` and `confirm_relationship_candidate` are write tools and require explicit user confirmation.
-- Prefer read-only commands first: `wsa status`, `wsa dashboard`, `wsa contacts`, `wsa brief`, `wsa quality`, `wsa candidates`, `wsa sources`, `wsa weekly-report`, `wsa next`, and `wsa suggest`.
+- Treat `watch`, `capture`, `import-image`, `ingest`, `feedback`, `candidate-confirm`, `candidates --sync`, `import-obsidian`, `import-source`, `export-data`, `delete-contact`, `analyze`, `export-obsidian`, `reset`, and `stop-watch` as write, delete, or process-control actions; explain the effect and get explicit user confirmation before running them.
+- The MCP server is mostly read-only in v1.0. `record_feedback` and `confirm_relationship_candidate` are write tools and require explicit user confirmation.
+- Prefer read-only commands first: `wsa status`, `wsa audit`, `wsa dashboard`, `wsa contacts`, `wsa brief`, `wsa quality`, `wsa candidates`, `wsa sources`, `wsa weekly-report`, `wsa next`, and `wsa suggest`.
 - Keep generated data local unless the user explicitly asks to publish, commit, or share it.
 
 ## Quick Start
@@ -23,19 +23,22 @@ Use this skill when the user asks to work with `wechat-social-assistant`, `wsa`,
 2. If the CLI is missing, run `scripts/install_cli.sh` from a trusted checkout or ask the user before installing from GitHub.
 3. Use `wsa status` to understand the current local memory before recommending actions.
 4. In MCP-native environments, configure the stdio server command `wsa-mcp` or `python3 -m wsa.mcp_server`.
-5. For daily planning, use `wsa dashboard`.
-6. For a specific person or group, use `wsa contacts --query NAME`, then `wsa brief NAME`, `wsa quality --contact NAME`, or `wsa next --contact NAME`.
-7. To grow the network from groups/events, run `wsa candidates`; only run `wsa candidates --sync` or `wsa candidate-confirm NAME --source-chat GROUP --yes` after confirmation.
-8. When the user reacts to a suggestion, record feedback with `wsa feedback NAME ACTION` after confirmation, then inspect it with `wsa feedback-list --contact NAME`.
-9. For weekly planning, use `wsa weekly-report`.
-10. To merge local sources such as vCard, ICS, notes, Obsidian people notes, or EML files, preview with `wsa import-source PATH --dry-run`, then import with `wsa import-source PATH --yes` after confirmation.
-11. For reports, use `wsa analyze` after user confirmation.
-12. For Obsidian export/import, use `wsa export-obsidian --vault PATH` or `wsa import-obsidian --vault PATH --yes` after user confirmation.
+5. Use `wsa audit` when the user asks what local data exists or wants migration/delete confidence.
+6. For daily planning, use `wsa dashboard`.
+7. For a specific person or group, use `wsa contacts --query NAME`, then `wsa brief NAME`, `wsa quality --contact NAME`, or `wsa next --contact NAME`.
+8. To grow the network from groups/events, run `wsa candidates`; only run `wsa candidates --sync` or `wsa candidate-confirm NAME --source-chat GROUP --yes` after confirmation.
+9. When the user reacts to a suggestion, record feedback with `wsa feedback NAME ACTION` after confirmation, then inspect it with `wsa feedback-list --contact NAME`.
+10. For weekly planning, use `wsa weekly-report`.
+11. To merge local sources such as vCard, ICS, notes, Obsidian people notes, or EML files, preview with `wsa import-source PATH --dry-run`, then import with `wsa import-source PATH --yes` after confirmation.
+12. For export/delete, run `wsa export-data --out PATH --yes` or `wsa delete-contact NAME --dry-run` then `--yes` only after confirmation.
+13. For reports, use `wsa analyze` after user confirmation.
+14. For Obsidian export/import, use `wsa export-obsidian --vault PATH` or `wsa import-obsidian --vault PATH --yes` after user confirmation.
 
 ## Common Commands
 
 ```bash
 wsa status
+wsa audit
 wsa-mcp
 python3 -m wsa.mcp_server
 wsa contacts --query NAME
@@ -47,6 +50,8 @@ wsa candidate-confirm NAME --source-chat GROUP --yes
 wsa sources --contact NAME
 wsa import-source ./contacts.vcf --dry-run
 wsa import-source ./contacts.vcf --yes
+wsa export-data --out ./wsa-export.json --yes
+wsa delete-contact NAME --dry-run
 wsa weekly-report --date 2026-05-27
 wsa feedback-list --contact NAME
 wsa feedback NAME too_pushy --note "draft was too direct"

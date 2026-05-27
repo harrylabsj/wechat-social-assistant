@@ -8,6 +8,12 @@ import re
 import sys
 import time
 
+from .audit import (
+    build_audit_report,
+    delete_contact_data,
+    export_local_data,
+    render_audit_report_markdown,
+)
 from .candidates import (
     confirm_relationship_candidate,
     discover_relationship_candidates,
@@ -238,6 +244,21 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
     status.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
     status.set_defaults(func=cmd_status)
+
+    audit = sub.add_parser("audit", help="Render a local data audit report.")
+    audit.add_argument("--out", type=Path)
+    audit.set_defaults(func=cmd_audit)
+
+    export_data = sub.add_parser("export-data", help="Export local database tables to a JSON file.")
+    export_data.add_argument("--out", type=Path, required=True)
+    export_data.add_argument("--yes", action="store_true", help="Required to write the export file.")
+    export_data.set_defaults(func=cmd_export_data)
+
+    delete_contact = sub.add_parser("delete-contact", help="Delete one contact and related local records.")
+    delete_contact.add_argument("contact")
+    delete_contact.add_argument("--yes", action="store_true", help="Required to delete local records.")
+    delete_contact.add_argument("--dry-run", action="store_true", help="Only show what would be deleted.")
+    delete_contact.set_defaults(func=cmd_delete_contact)
 
     stop_watch = sub.add_parser(
         "stop-watch",
@@ -744,6 +765,42 @@ def cmd_feedback_list(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
     print(render_status_report(report), end="")
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    report = build_audit_report(args.db)
+    markdown = render_audit_report_markdown(report)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_export_data(args: argparse.Namespace) -> int:
+    if not args.yes:
+        raise SystemExit("Use --yes to export local data to a file.")
+    result = export_local_data(args.db, out_path=args.out)
+    tables = _audit_table_summary(result.table_counts)
+    print(f"exported local data: out={result.out_path} {tables}")
+    return 0
+
+
+def cmd_delete_contact(args: argparse.Namespace) -> int:
+    if not args.yes and not args.dry_run:
+        raise SystemExit("Use --yes to delete a contact, or --dry-run to preview.")
+    result = delete_contact_data(args.db, args.contact, dry_run=args.dry_run)
+    prefix = "dry-run" if result.dry_run else "deleted contact"
+    print(
+        f"{prefix}: contact={result.person_name} "
+        f"people={result.removed_people} captures={result.removed_captures} "
+        f"signals={result.removed_signals} feedback={result.removed_feedback} "
+        f"candidates={result.removed_candidates} enrichments={result.removed_enrichments} "
+        f"sources={result.removed_sources}"
+    )
     return 0
 
 
@@ -1504,6 +1561,10 @@ def _format_matching_latest(profiles) -> str:
 
 def _source_import_type_summary(by_type: dict[str, int]) -> str:
     return " ".join(f"{source_type}={by_type[source_type]}" for source_type in SOURCE_TYPES if by_type.get(source_type))
+
+
+def _audit_table_summary(table_counts: dict[str, int]) -> str:
+    return " ".join(f"{table}={count}" for table, count in table_counts.items())
 
 
 def _profiles_empty_message(query: str | None) -> str:

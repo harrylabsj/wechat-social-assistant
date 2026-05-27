@@ -61,6 +61,10 @@
 - CLI `dashboard` renders the operating view in Markdown.
 - MCP `get_relationship_dashboard` and `wsa://relationship-dashboard` expose the dashboard read-only to agent ecosystems.
 
-## v1.0 Local Relationship OS
+## v1.0 Local Relationship OS - shipped
 
 - Stable CLI, Hermes Skill, MCP server, Obsidian schema, database migrations, auditability, export/delete, explainable suggestions, and multi-source relationship memory.
+- CLI `audit` renders local table counts and data paths.
+- CLI `export-data --yes` writes a local JSON snapshot for migration/backup.
+- CLI `delete-contact --dry-run/--yes` previews or removes one contact's local records.
+- MCP `get_audit_report` and `wsa://audit` expose audit data read-only; destructive delete remains CLI-only with confirmation.
