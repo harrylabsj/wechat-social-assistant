@@ -18,6 +18,8 @@ from .cli import (
     _render_brief_markdown,
     _render_contacts_markdown,
     _render_obsidian_daily_report,
+    _render_obsidian_weekly_report,
+    _obsidian_week_label,
 )
 from .candidates import (
     candidate_to_dict,
@@ -25,6 +27,7 @@ from .candidates import (
     discover_relationship_candidates,
     render_candidates_markdown,
 )
+from .enrichment import enrichment_by_person, enrichment_to_dict
 from .feedback import (
     FEEDBACK_ACTIONS,
     feedback_to_dict,
@@ -44,7 +47,7 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.7.0"
 
 MCP_TOOLS = [
     {
@@ -107,6 +110,20 @@ MCP_TOOLS = [
             "type": "object",
             "properties": {
                 "date": {"type": "string", "description": "Report date as YYYY-MM-DD. Defaults to today."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "min_score": {"type": "integer", "minimum": 0, "default": 45},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_weekly_report",
+        "description": "Render the local weekly relationship report in memory without writing files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "Any date inside the ISO week. Defaults to today."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 "min_score": {"type": "integer", "minimum": 0, "default": 45},
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
@@ -240,6 +257,12 @@ MCP_RESOURCES = [
         "mimeType": "text/markdown",
     },
     {
+        "uri": "wsa://weekly-report",
+        "name": "WSA weekly report",
+        "description": "Weekly relationship report with follow-ups, manual enrichment, gaps, and recent changes.",
+        "mimeType": "text/markdown",
+    },
+    {
         "uri": "wsa://relationship-quality",
         "name": "WSA relationship quality",
         "description": "Evidence-backed relationship quality scores, risks, information gaps, and next actions.",
@@ -259,6 +282,13 @@ MCP_PROMPTS = [
         "description": "Guide an agent to review today's local relationship report safely.",
         "arguments": [
             {"name": "date", "description": "Optional report date as YYYY-MM-DD.", "required": False}
+        ],
+    },
+    {
+        "name": "weekly-relationship-review",
+        "description": "Guide an agent to review the weekly local relationship report safely.",
+        "arguments": [
+            {"name": "date", "description": "Optional date inside the ISO week.", "required": False}
         ],
     },
     {
@@ -375,6 +405,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_contact_brief": _tool_get_contact_brief,
         "get_next_followup": _tool_get_next_followup,
         "get_daily_report": _tool_get_daily_report,
+        "get_weekly_report": _tool_get_weekly_report,
         "get_relationship_quality": _tool_get_relationship_quality,
         "list_relationship_candidates": _tool_list_relationship_candidates,
         "confirm_relationship_candidate": _tool_confirm_relationship_candidate,
@@ -408,6 +439,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
         tool_result = _tool_search_contacts(merged_arguments)
     elif normalized_uri == "wsa://daily-report":
         tool_result = _tool_get_daily_report(merged_arguments)
+    elif normalized_uri == "wsa://weekly-report":
+        tool_result = _tool_get_weekly_report(merged_arguments)
     elif normalized_uri == "wsa://relationship-quality":
         tool_result = _tool_get_relationship_quality(merged_arguments)
     elif normalized_uri == "wsa://relationship-candidates":
@@ -437,6 +470,12 @@ def _handle_prompt_get(params: dict[str, Any]) -> dict[str, Any]:
         text = (
             f"请以只读方式调用 wechat-social-assistant 的 get_daily_report，日期为 {report_date}。"
             "总结人脉变化、应该主动联系的人、每条草稿的语气风险，并提醒用户所有发送动作都需要人工确认。"
+        )
+    elif name == "weekly-relationship-review":
+        report_date = str(arguments.get("date") or date.today().isoformat())
+        text = (
+            f"请以只读方式调用 wechat-social-assistant 的 get_weekly_report，日期为 {report_date}。"
+            "总结本周应联系的人、手工补充的人脉、资料缺口和关系风险；不要代用户发送微信。"
         )
     elif name == "contact-followup":
         contact_name = str(arguments.get("contact_name") or "").strip()
@@ -580,6 +619,38 @@ def _tool_get_daily_report(arguments: dict[str, Any]) -> dict[str, Any]:
             "date": report_date,
             "profile_count": len(profiles),
             "followups": [_suggestion_to_dict(suggestion) for suggestion in followups],
+            "status": _status_to_dict(status_report),
+        },
+    )
+
+
+def _tool_get_weekly_report(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    report_date = str(arguments.get("date") or date.today().isoformat())
+    limit = _limit(arguments.get("limit"), default=20)
+    min_score = _min_score(arguments.get("min_score"), default=45)
+    profiles = _profiles_or_empty(db_path)
+    followups = _suggestions_or_empty(db_path, limit=limit, min_score=min_score)
+    status_report = build_status_report(db_path)
+    enrichments = enrichment_by_person(db_path) if db_path.exists() else {}
+    filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
+    markdown = _render_obsidian_weekly_report(
+        report_date,
+        profiles,
+        followups,
+        status_report=status_report,
+        min_score=min_score,
+        filename_by_name=filename_by_name,
+        enrichments_by_person=enrichments,
+    )
+    return _tool_result(
+        markdown,
+        {
+            "date": report_date,
+            "week": _obsidian_week_label(report_date),
+            "profile_count": len(profiles),
+            "followups": [_suggestion_to_dict(suggestion) for suggestion in followups],
+            "enrichments": [enrichment_to_dict(enrichment) for enrichment in enrichments.values()],
             "status": _status_to_dict(status_report),
         },
     )

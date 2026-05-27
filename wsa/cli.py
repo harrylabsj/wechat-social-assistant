@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import re
 import sys
@@ -14,8 +14,15 @@ from .candidates import (
     render_candidates_markdown,
     sync_relationship_candidates,
 )
+from .enrichment import (
+    ContactEnrichment,
+    ENRICHMENT_FIELDS,
+    enrichment_by_person,
+    enrichment_summary,
+)
 from .feedback import FEEDBACK_ACTIONS, list_feedback, record_feedback, render_feedback_markdown
 from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
+from .obsidian_memory import import_obsidian_enrichments
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
@@ -48,7 +55,7 @@ def _default_reports_dir(db_path: Path) -> Path:
 class WSAArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args: list[str] | None = None, namespace: argparse.Namespace | None = None):
         parsed = super().parse_args(args, namespace)
-        if getattr(parsed, "command", None) in {"analyze", "status", "watch"} and parsed.log_file is None:
+        if getattr(parsed, "command", None) in {"analyze", "status", "watch", "weekly-report"} and parsed.log_file is None:
             parsed.log_file = Path(parsed.db).parent / "watch.log"
         if getattr(parsed, "command", None) == "analyze":
             reports_dir = _default_reports_dir(Path(parsed.db))
@@ -251,6 +258,25 @@ def build_parser() -> argparse.ArgumentParser:
     obsidian.add_argument("--min-score", type=int, default=45, help="Only include proactive follow-ups with score >= N.")
     obsidian.add_argument("--limit", type=int, default=20, help="Maximum follow-ups in the daily report.")
     obsidian.set_defaults(func=cmd_export_obsidian)
+
+    obsidian_import = sub.add_parser(
+        "import-obsidian",
+        help="Import manual contact enrichment from Obsidian social-circle notes.",
+    )
+    obsidian_import.add_argument("--vault", type=Path, default=DEFAULT_OBSIDIAN_VAULT, help="Obsidian vault root.")
+    obsidian_import.add_argument("--yes", action="store_true", help="Required to write imported enrichment.")
+    obsidian_import.add_argument("--dry-run", action="store_true", help="Preview importable enrichment without writing.")
+    obsidian_import.add_argument("--imported-at", help="Override import timestamp for tests/imports.")
+    obsidian_import.set_defaults(func=cmd_import_obsidian)
+
+    weekly = sub.add_parser("weekly-report", help="Render a weekly relationship report.")
+    weekly.add_argument("--date", help="Any date inside the ISO week. Defaults to today.")
+    weekly.add_argument("--min-score", type=int, default=45, help="Only include proactive follow-ups with score >= N.")
+    weekly.add_argument("--limit", type=int, default=20, help="Maximum follow-ups in the weekly report.")
+    weekly.add_argument("--out", type=Path)
+    weekly.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
+    weekly.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
+    weekly.set_defaults(func=cmd_weekly_report)
 
     watch = sub.add_parser("watch", help="Explicitly watch the frontmost WeChat window and ingest changed OCR text.")
     watch.add_argument("--contact", help="Contact name hint; omit to guess from OCR.")
@@ -696,6 +722,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         f"signals={result.removed_signals} "
         f"feedback={result.removed_feedback} "
         f"candidates={result.removed_candidates} "
+        f"enrichments={result.removed_enrichments} "
         f"screenshots={result.removed_screenshots}"
     )
     return 0
@@ -788,6 +815,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
 
     profiles = build_profiles(args.db)
     filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
+    enrichments = enrichment_by_person(args.db)
     all_suggestions = build_suggestions(args.db, limit=1000, min_score=0)
     suggestions_by_person = _suggestions_by_person(all_suggestions)
     written_contacts = []
@@ -802,6 +830,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
                 suggestion,
                 evidence=evidence,
                 filename_by_name=filename_by_name,
+                enrichment=enrichments.get(profile.name),
             ),
         )
         written_contacts.append(path)
@@ -809,7 +838,12 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
     people_index_path = people_dir / "索引.md"
     _write_text(
         people_index_path,
-        _render_obsidian_people_index(profiles, followups, filename_by_name=filename_by_name),
+        _render_obsidian_people_index(
+            profiles,
+            followups,
+            filename_by_name=filename_by_name,
+            enrichments_by_person=enrichments,
+        ),
     )
     status_report = build_status_report(
         args.db,
@@ -826,12 +860,70 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
             status_report=status_report,
             min_score=args.min_score,
             filename_by_name=filename_by_name,
+            enrichments_by_person=enrichments,
+        ),
+    )
+    weekly_path = reports_dir / f"{_obsidian_week_label(report_date)}.md"
+    _write_text(
+        weekly_path,
+        _render_obsidian_weekly_report(
+            report_date,
+            profiles,
+            followups,
+            status_report=status_report,
+            min_score=args.min_score,
+            filename_by_name=filename_by_name,
+            enrichments_by_person=enrichments,
         ),
     )
     print(
         f"exported contacts={len(written_contacts)} "
-        f"people_dir={people_dir} index={people_index_path} report={report_path}"
+        f"people_dir={people_dir} index={people_index_path} report={report_path} weekly={weekly_path}"
     )
+    return 0
+
+
+def cmd_import_obsidian(args: argparse.Namespace) -> int:
+    if not args.yes and not args.dry_run:
+        raise SystemExit("Use --yes to import Obsidian enrichment, or --dry-run to preview.")
+    result = import_obsidian_enrichments(
+        args.db,
+        vault=args.vault,
+        dry_run=args.dry_run,
+        imported_at=args.imported_at,
+    )
+    prefix = "dry-run" if result.dry_run else "imported obsidian enrichments"
+    print(
+        f"{prefix}: scanned={result.scanned_count} "
+        f"parsed={result.parsed_count} imported={result.imported_count}"
+    )
+    return 0
+
+
+def cmd_weekly_report(args: argparse.Namespace) -> int:
+    init_db(args.db)
+    refresh_capture_signals(args.db)
+    refresh_derived_people(args.db)
+    report_date = _obsidian_report_date(args.date)
+    profiles = build_profiles(args.db)
+    followups = build_suggestions(args.db, limit=args.limit, min_score=args.min_score)
+    status_report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
+    filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
+    markdown = _render_obsidian_weekly_report(
+        report_date,
+        profiles,
+        followups,
+        status_report=status_report,
+        min_score=args.min_score,
+        filename_by_name=filename_by_name,
+        enrichments_by_person=enrichment_by_person(args.db),
+    )
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
     return 0
 
 
@@ -875,6 +967,7 @@ def _render_obsidian_contact_markdown(
     *,
     evidence: BriefEvidence | None = None,
     filename_by_name: dict[str, str] | None = None,
+    enrichment: ContactEnrichment | None = None,
 ) -> str:
     lines = [
         f"# {profile.name}",
@@ -897,7 +990,9 @@ def _render_obsidian_contact_markdown(
     if profile.files:
         lines.append(f"- 文件：{', '.join(profile.files)}")
 
-    profile_gaps = _profile_information_gaps(profile)
+    lines.extend(_obsidian_manual_section(enrichment))
+
+    profile_gaps = _profile_information_gaps(profile, enrichment=enrichment)
     if profile_gaps:
         lines.extend(["", "## 资料缺口"])
         lines.extend(f"- {gap}" for gap in profile_gaps)
@@ -938,7 +1033,14 @@ def _render_obsidian_contact_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_obsidian_people_index(profiles, followups=(), *, filename_by_name: dict[str, str] | None = None) -> str:
+def _render_obsidian_people_index(
+    profiles,
+    followups=(),
+    *,
+    filename_by_name: dict[str, str] | None = None,
+    enrichments_by_person: dict[str, ContactEnrichment] | None = None,
+) -> str:
+    enrichments_by_person = enrichments_by_person or {}
     lines = [
         "# 人脉索引",
         "",
@@ -958,7 +1060,14 @@ def _render_obsidian_people_index(profiles, followups=(), *, filename_by_name: d
         ]
     )
     if profiles:
-        lines.extend(_obsidian_people_index_line(profile, filename_by_name=filename_by_name) for profile in profiles)
+        lines.extend(
+            _obsidian_people_index_line(
+                profile,
+                filename_by_name=filename_by_name,
+                enrichment=enrichments_by_person.get(profile.name),
+            )
+            for profile in profiles
+        )
     else:
         lines.append("- 暂无联系人档案。")
     return "\n".join(lines).rstrip() + "\n"
@@ -980,15 +1089,29 @@ def _obsidian_index_followup_lines(
     ]
 
 
-def _obsidian_people_index_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
-    summary = _obsidian_people_index_summary(profile, filename_by_name=filename_by_name)
+def _obsidian_people_index_line(
+    profile,
+    *,
+    filename_by_name: dict[str, str] | None = None,
+    enrichment: ContactEnrichment | None = None,
+) -> str:
+    summary = _obsidian_people_index_summary(
+        profile,
+        filename_by_name=filename_by_name,
+        enrichment=enrichment,
+    )
     return (
         f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}"
         f"（{_contact_kind_label(profile.kind)}，{format_display_time(profile.last_seen_at)}）：{summary}"
     )
 
 
-def _obsidian_people_index_summary(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
+def _obsidian_people_index_summary(
+    profile,
+    *,
+    filename_by_name: dict[str, str] | None = None,
+    enrichment: ContactEnrichment | None = None,
+) -> str:
     details = []
     if profile.source_chats:
         details.append(f"来源：{_obsidian_contact_links(profile.source_chats, filename_by_name=filename_by_name)}")
@@ -1000,7 +1123,9 @@ def _obsidian_people_index_summary(profile, *, filename_by_name: dict[str, str] 
         details.append(f"身份线索：{', '.join(profile.identity_hints)}")
     if profile.signals:
         details.append(f"关系信号：{', '.join(signal_label(signal) for signal in profile.signals)}")
-    gaps = _profile_information_gaps(profile)
+    if enrichment:
+        details.append(f"手工补充：{enrichment_summary(enrichment)}")
+    gaps = _profile_information_gaps(profile, enrichment=enrichment)
     if gaps:
         details.append(f"资料缺口：{'；'.join(gaps)}")
     return "；".join(details) if details else "暂无摘要"
@@ -1014,7 +1139,9 @@ def _render_obsidian_daily_report(
     status_report,
     min_score: int,
     filename_by_name: dict[str, str] | None = None,
+    enrichments_by_person: dict[str, ContactEnrichment] | None = None,
 ) -> str:
+    enrichments_by_person = enrichments_by_person or {}
     kind_counts = {
         "私聊/单聊": sum(1 for profile in profiles if profile.kind == "direct"),
         "群聊": sum(1 for profile in profiles if profile.kind == "group"),
@@ -1044,15 +1171,36 @@ def _render_obsidian_daily_report(
             signals = ", ".join(signal_label(signal) for signal in profile.signals)
             lines.append(f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}：{signals}")
 
+    enriched_profiles = [profile for profile in profiles if profile.name in enrichments_by_person]
+    if enriched_profiles:
+        lines.extend(["", "### 手工补充的人脉"])
+        for profile in enriched_profiles[:12]:
+            enrichment = enrichments_by_person[profile.name]
+            lines.append(
+                f"- {profile.name}：{enrichment_summary(enrichment)}"
+                f"（{_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}）"
+            )
+
     recent_profiles = sorted(profiles, key=lambda profile: (profile.last_seen_at, profile.name), reverse=True)[:8]
     if recent_profiles:
         lines.extend(["", "### 最近出现的人脉"])
         lines.extend(_obsidian_recent_profile_line(profile, filename_by_name=filename_by_name) for profile in recent_profiles)
 
-    gap_profiles = [profile for profile in recent_profiles if _profile_information_gaps(profile)]
+    gap_profiles = [
+        profile
+        for profile in recent_profiles
+        if _profile_information_gaps(profile, enrichment=enrichments_by_person.get(profile.name))
+    ]
     if gap_profiles:
         lines.extend(["", "### 需要补充信息的人脉"])
-        lines.extend(_obsidian_profile_gap_line(profile, filename_by_name=filename_by_name) for profile in gap_profiles)
+        lines.extend(
+            _obsidian_profile_gap_line(
+                profile,
+                filename_by_name=filename_by_name,
+                enrichment=enrichments_by_person.get(profile.name),
+            )
+            for profile in gap_profiles
+        )
 
     lines.extend(["", "## 应该主动联系的人"])
     if followups:
@@ -1070,9 +1218,104 @@ def _render_obsidian_daily_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_obsidian_weekly_report(
+    report_date: str,
+    profiles,
+    followups,
+    *,
+    status_report,
+    min_score: int,
+    filename_by_name: dict[str, str] | None = None,
+    enrichments_by_person: dict[str, ContactEnrichment] | None = None,
+) -> str:
+    enrichments_by_person = enrichments_by_person or {}
+    week_label = _obsidian_week_label(report_date)
+    week_start, week_end = _obsidian_week_range(report_date)
+    kind_counts = {
+        "私聊/单聊": sum(1 for profile in profiles if profile.kind == "direct"),
+        "群聊": sum(1 for profile in profiles if profile.kind == "group"),
+        "群内联系人": sum(1 for profile in profiles if profile.kind == "speaker"),
+        "手工补充": sum(1 for profile in profiles if profile.kind == "manual"),
+    }
+    gap_profiles = [
+        profile
+        for profile in profiles
+        if _profile_information_gaps(profile, enrichment=enrichments_by_person.get(profile.name))
+    ][:12]
+    enriched_profiles = [profile for profile in profiles if profile.name in enrichments_by_person][:12]
+    recent_profiles = sorted(profiles, key=lambda profile: (profile.last_seen_at, profile.name), reverse=True)[:12]
+    lines = [
+        f"# 社交圈周报 {week_label}",
+        "",
+        f"- 周期：{week_start.isoformat()} 至 {week_end.isoformat()}",
+        f"- 联系人档案：{len(profiles)}",
+        f"- 数据库联系人：{status_report.contact_count}",
+        f"- 采集记录：{status_report.capture_count}",
+        f"- 私聊/单聊：{kind_counts['私聊/单聊']}",
+        f"- 群聊：{kind_counts['群聊']}",
+        f"- 群内联系人：{kind_counts['群内联系人']}",
+        f"- 手工补充：{len(enrichments_by_person)}",
+        "",
+        "## 本周应主动联系",
+    ]
+    if followups:
+        for index, suggestion in enumerate(followups, start=1):
+            lines.extend(
+                [
+                    f"{index}. {_obsidian_contact_link(suggestion.person_name, filename_by_name=filename_by_name)} / {suggestion.action} / {suggestion.score}分 / {followup_strength_label(suggestion.score)}",
+                    f"   - 原因：{suggestion.why}",
+                    f"   - 草稿：{suggestion.draft}",
+                ]
+            )
+    else:
+        lines.append(f"- 暂无达到阈值 {min_score} 的主动联系建议。")
+
+    lines.extend(["", "## 本周手工补充"])
+    if enriched_profiles:
+        for profile in enriched_profiles:
+            enrichment = enrichments_by_person[profile.name]
+            lines.append(
+                f"- {profile.name}：{enrichment_summary(enrichment)}"
+                f"（{_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}）"
+            )
+    else:
+        lines.append("- 暂无手工补充。")
+
+    lines.extend(["", "## 资料缺口"])
+    if gap_profiles:
+        lines.extend(
+            _obsidian_profile_gap_line(
+                profile,
+                filename_by_name=filename_by_name,
+                enrichment=enrichments_by_person.get(profile.name),
+            )
+            for profile in gap_profiles
+        )
+    else:
+        lines.append("- 暂无明显资料缺口。")
+
+    lines.extend(["", "## 最近人脉变化"])
+    if recent_profiles:
+        lines.extend(
+            _obsidian_recent_profile_line(profile, filename_by_name=filename_by_name)
+            for profile in recent_profiles
+        )
+    else:
+        lines.append("- 暂无联系人档案。")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _safe_markdown_filename(value: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|]+', "-", value).strip(" .")
     return cleaned or "未命名联系人"
+
+
+def _obsidian_manual_section(enrichment: ContactEnrichment | None = None) -> list[str]:
+    fields = enrichment.fields if enrichment else {}
+    lines = ["", "## 手工补充"]
+    for key, label in ENRICHMENT_FIELDS:
+        lines.append(f"- {label}：{fields.get(key, '')}")
+    return lines
 
 
 def _obsidian_recent_profile_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
@@ -1083,25 +1326,49 @@ def _obsidian_recent_profile_line(profile, *, filename_by_name: dict[str, str] |
     return f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}（{'，'.join(details)}）"
 
 
-def _obsidian_profile_gap_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
-    gaps = "；".join(_profile_information_gaps(profile))
+def _obsidian_profile_gap_line(
+    profile,
+    *,
+    filename_by_name: dict[str, str] | None = None,
+    enrichment: ContactEnrichment | None = None,
+) -> str:
+    gaps = "；".join(_profile_information_gaps(profile, enrichment=enrichment))
     return (
         f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}（{_contact_kind_label(profile.kind)}）："
         f"{gaps}；最近出现 {format_display_time(profile.last_seen_at)}"
     )
 
 
-def _profile_information_gaps(profile) -> tuple[str, ...]:
+def _profile_information_gaps(profile, *, enrichment: ContactEnrichment | None = None) -> tuple[str, ...]:
     if profile.kind == "group":
         return ()
     gaps = []
-    if not profile.identity_hints and not profile.organizations:
+    has_manual_identity = bool(
+        enrichment
+        and (
+            enrichment.fields.get("company")
+            or enrichment.fields.get("role")
+            or enrichment.fields.get("context")
+        )
+    )
+    if not profile.identity_hints and not profile.organizations and not has_manual_identity:
         gaps.append("缺少身份/机构线索（建议补充：公司/职位/角色、认识场景）")
     if profile.kind == "speaker" and not profile.source_chats:
         gaps.append("缺少来源群（建议补充：来自哪个群或渠道）")
     if not profile.recent_contents:
         gaps.append("缺少最近联系内容（建议导入最近聊天截图或手动记录一句摘要）")
     return tuple(gaps)
+
+
+def _obsidian_week_label(report_date: str) -> str:
+    year, week, _weekday = date.fromisoformat(report_date).isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _obsidian_week_range(report_date: str) -> tuple[date, date]:
+    current = date.fromisoformat(report_date)
+    start = current - timedelta(days=current.weekday())
+    return start, start + timedelta(days=6)
 
 
 def _obsidian_contact_link(name: str, *, filename_by_name: dict[str, str] | None = None) -> str:
@@ -1533,6 +1800,7 @@ def _contact_kind_label(kind: str) -> str:
         "group": "群聊",
         "direct": "私聊/单聊",
         "speaker": "群内联系人",
+        "manual": "手工补充",
     }.get(kind, kind)
 
 

@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -28,6 +28,7 @@
       "get_contact_brief",
       "get_next_followup",
       "get_daily_report",
+      "get_weekly_report",
       "get_relationship_quality",
       "list_relationship_candidates",
       "confirm_relationship_candidate",
@@ -39,11 +40,13 @@
       "wsa://status",
       "wsa://contacts",
       "wsa://daily-report",
+      "wsa://weekly-report",
       "wsa://relationship-quality",
       "wsa://relationship-candidates"
     ],
     "prompts": [
       "daily-relationship-review",
+      "weekly-relationship-review",
       "contact-followup",
       "relationship-candidate-review",
       "safe-capture-review"
@@ -59,8 +62,11 @@
     "feedback_loop",
     "followup_suggestions",
     "daily_analysis",
+    "weekly_analysis",
     "mcp_read_only_interface",
     "obsidian_export",
+    "obsidian_import",
+    "manual_enrichment",
     "ocr_import",
     "explicit_watch_mode"
   ],
@@ -97,6 +103,11 @@
       "example": "python3 -m wsa.cli candidate-confirm NAME --source-chat GROUP --yes"
     },
     {
+      "name": "weekly-report",
+      "mode": "read",
+      "example": "python3 -m wsa.cli weekly-report --date 2026-05-27"
+    },
+    {
       "name": "feedback-list",
       "mode": "read",
       "example": "python3 -m wsa.cli feedback-list --contact NAME"
@@ -130,6 +141,12 @@
       "example": "python3 -m wsa.cli export-obsidian --vault \"$HOME/Documents/Obsidian Vault\""
     },
     {
+      "name": "import-obsidian",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-obsidian --vault \"$HOME/Documents/Obsidian Vault\" --yes"
+    },
+    {
       "name": "import-image",
       "mode": "write-database",
       "requires_confirmation": true,
@@ -151,6 +168,7 @@
   "data_policy": {
     "storage": "local-first",
     "database": "data/social.db by default",
+    "manual_enrichment": "contact_enrichments rows inside data/social.db",
     "screenshots": "data/captures by default",
     "reads_wechat_database": false,
     "sends_messages": false,

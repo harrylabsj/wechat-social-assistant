@@ -39,10 +39,13 @@
 - CLI `candidates` renders local candidate people; `candidates --sync` persists the pending queue; `candidate-confirm --yes` promotes a candidate after review.
 - MCP `list_relationship_candidates` is read-only; `confirm_relationship_candidate` requires explicit confirmation.
 
-## v0.7 Obsidian and Knowledge Base Depth
+## v0.7 Obsidian and Knowledge Base Depth - shipped
 
 - Make Obsidian a two-way relationship memory surface.
 - Improve daily and weekly relationship reports, information gaps, and manual enrichment.
+- CLI `import-obsidian` imports user-edited `社交圈/人脉/*.md` manual enrichment into local `contact_enrichments`.
+- `export-obsidian` writes editable manual enrichment blocks, daily reports, and weekly reports.
+- MCP `get_weekly_report` and `wsa://weekly-report` expose weekly analysis read-only.
 
 ## v0.8 Multi-Source Inputs
 

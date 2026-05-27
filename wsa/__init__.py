@@ -9,4 +9,6 @@ __all__ = [
     "relationship_quality",
     "feedback",
     "candidates",
+    "enrichment",
+    "obsidian_memory",
 ]

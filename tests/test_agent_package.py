@@ -19,7 +19,7 @@ class AgentPackageTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
-        self.assertEqual("0.6.0", manifest["version"])
+        self.assertEqual("0.7.0", manifest["version"])
         self.assertEqual("python3 -m wsa.cli", manifest["cli"]["entrypoint"])
         self.assertEqual("python3 -m wsa.mcp_server", manifest["mcp"]["command"])
         self.assertEqual("stdio", manifest["mcp"]["transport"])
@@ -33,14 +33,17 @@ class AgentPackageTests(unittest.TestCase):
         self.assertTrue(manifest["mcp"]["write_tools_require_confirmation"])
         self.assertIn("get_contact_brief", manifest["mcp"]["tools"])
         self.assertIn("get_relationship_quality", manifest["mcp"]["tools"])
+        self.assertIn("get_weekly_report", manifest["mcp"]["tools"])
         self.assertIn("list_relationship_candidates", manifest["mcp"]["tools"])
         self.assertIn("confirm_relationship_candidate", manifest["mcp"]["tools"])
         self.assertIn("list_feedback", manifest["mcp"]["tools"])
         self.assertIn("record_feedback", manifest["mcp"]["tools"])
         self.assertIn("wsa://daily-report", manifest["mcp"]["resources"])
+        self.assertIn("wsa://weekly-report", manifest["mcp"]["resources"])
         self.assertIn("wsa://relationship-quality", manifest["mcp"]["resources"])
         self.assertIn("wsa://relationship-candidates", manifest["mcp"]["resources"])
         self.assertIn("contact-followup", manifest["mcp"]["prompts"])
+        self.assertIn("weekly-relationship-review", manifest["mcp"]["prompts"])
         self.assertIn("relationship-candidate-review", manifest["mcp"]["prompts"])
 
         command_names = {command["name"] for command in manifest["commands"]}
@@ -53,6 +56,8 @@ class AgentPackageTests(unittest.TestCase):
                 "quality",
                 "candidates",
                 "candidate-confirm",
+                "weekly-report",
+                "import-obsidian",
                 "feedback",
                 "feedback-list",
                 "next",
@@ -116,7 +121,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
         payload = json.loads(doctor_result.stdout)
         self.assertEqual("wechat-social-assistant", payload["agent_id"])
-        self.assertEqual("0.6.0", payload["version"])
+        self.assertEqual("0.7.0", payload["version"])
         self.assertIn("checks", payload)
         self.assertIn("cli_importable", {check["id"] for check in payload["checks"]})
         self.assertIn("mcp_importable", {check["id"] for check in payload["checks"]})
@@ -126,6 +131,8 @@ class AgentPackageTests(unittest.TestCase):
         self.assertIn("quality", runner_result.stdout)
         self.assertIn("candidates", runner_result.stdout)
         self.assertIn("candidate-confirm", runner_result.stdout)
+        self.assertIn("weekly-report", runner_result.stdout)
+        self.assertIn("import-obsidian", runner_result.stdout)
         self.assertIn("feedback", runner_result.stdout)
         self.assertIn("feedback-list", runner_result.stdout)
         self.assertIn("export-obsidian", runner_result.stdout)

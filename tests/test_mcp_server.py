@@ -22,6 +22,7 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_contact_brief",
                 "get_next_followup",
                 "get_daily_report",
+                "get_weekly_report",
                 "get_relationship_quality",
                 "list_relationship_candidates",
                 "confirm_relationship_candidate",
@@ -52,7 +53,7 @@ class MCPServerContractTests(unittest.TestCase):
         )
         self.assertGreaterEqual(
             {prompt["name"] for prompt in mcp_server.MCP_PROMPTS},
-            {"daily-relationship-review", "contact-followup", "safe-capture-review"},
+            {"daily-relationship-review", "weekly-relationship-review", "contact-followup", "safe-capture-review"},
         )
 
     def test_jsonrpc_initializes_and_lists_capabilities(self):
@@ -98,6 +99,7 @@ class MCPServerContractTests(unittest.TestCase):
             brief = _call_tool("get_contact_brief", db_path=db_path, contact_name="张三")
             followup = _call_tool("get_next_followup", db_path=db_path, contact_name="张三", min_score=0)
             daily = _call_tool("get_daily_report", db_path=db_path, date="2026-05-27", min_score=0)
+            weekly = _call_tool("get_weekly_report", db_path=db_path, date="2026-05-27", min_score=0)
             quality = _call_tool("get_relationship_quality", db_path=db_path, contact_name="张三", min_score=0)
             candidates = _call_tool("list_relationship_candidates", db_path=db_path, min_confidence=0)
             feedback = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
@@ -113,6 +115,8 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("draft", followup["structuredContent"]["suggestion"])
         self.assertIn("# 社交圈分析报告 2026-05-27", daily["content"][0]["text"])
         self.assertIn("followups", daily["structuredContent"])
+        self.assertIn("# 社交圈周报 2026-W22", weekly["content"][0]["text"])
+        self.assertEqual("2026-W22", weekly["structuredContent"]["week"])
         self.assertIn("# 关系运营台", quality["content"][0]["text"])
         self.assertEqual("张三", quality["structuredContent"]["cards"][0]["name"])
         self.assertIn("relationship_strength", quality["structuredContent"]["cards"][0]["scores"])

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
+from .enrichment import ContactEnrichment, enrichment_by_person
 from .parser import TIME_RE, extract_signals, is_noise_line
 from .store import connect
 from .timefmt import format_display_time
@@ -200,6 +201,7 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
                 speaker_builder.add_organizations(speaker_organizations.get(speaker, []))
                 speaker_builder.signals.update(speaker_signals.get(speaker, set()))
 
+    _merge_enrichments(builders, db_path)
     profiles = [builder.to_profile() for builder in builders.values()]
     profiles.sort(key=lambda profile: (profile.last_seen_at, profile.name), reverse=True)
     if limit is not None:
@@ -491,6 +493,43 @@ def _ensure_builder(
     return builders[key]
 
 
+def _merge_enrichments(
+    builders: dict[tuple[str, str], _ProfileBuilder],
+    db_path: Path | str,
+) -> None:
+    for name, enrichment in enrichment_by_person(db_path).items():
+        matching_builders = [builder for (kind, builder_name), builder in builders.items() if builder_name == name]
+        if not matching_builders:
+            builder = _ensure_builder(builders, name, "manual")
+            builder.touch(enrichment.updated_at or enrichment.imported_at)
+            matching_builders = [builder]
+        for builder in matching_builders:
+            _apply_enrichment(builder, enrichment)
+
+
+def _apply_enrichment(builder: _ProfileBuilder, enrichment: ContactEnrichment) -> None:
+    company = enrichment.fields.get("company")
+    if company:
+        builder.add_organizations([company])
+    hints = []
+    for key, label in (
+        ("role", "职位/角色"),
+        ("context", "认识场景"),
+        ("tags", "标签"),
+    ):
+        value = enrichment.fields.get(key)
+        if value:
+            hints.append(f"{label}：{value}")
+    builder.add_identity_hints(hints)
+    manual_notes = []
+    for key, label in (("notes", "备注"), ("next_followup", "下次跟进")):
+        value = enrichment.fields.get(key)
+        if value:
+            manual_notes.append(f"{label}：{value}")
+    if builder.kind == "manual":
+        builder.add_recent(manual_notes)
+
+
 def _is_speaker_name(candidate: str, *, chat_name: str) -> bool:
     if not candidate or candidate == chat_name:
         return False
@@ -656,6 +695,7 @@ def _kind_label(kind: str) -> str:
         "group": "群聊",
         "direct": "私聊/单聊",
         "speaker": "群内联系人",
+        "manual": "手工补充",
     }.get(kind, kind)
 
 

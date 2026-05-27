@@ -41,7 +41,20 @@
 
 1. Confirm the vault path.
 2. Run `wsa export-obsidian --vault PATH`.
-3. Check `社交圈/人脉/索引.md` and `社交圈/分析报告/YYYY-MM-DD.md`.
+3. Check `社交圈/人脉/索引.md`, `社交圈/分析报告/YYYY-MM-DD.md`, and `社交圈/分析报告/YYYY-Www.md`.
+
+## Obsidian Import
+
+1. Confirm the user wants to import manual contact enrichment from Obsidian.
+2. Run `wsa import-obsidian --vault PATH --dry-run`.
+3. If the preview is expected, run `wsa import-obsidian --vault PATH --yes`.
+4. Run `wsa export-obsidian --vault PATH` again if the user wants refreshed notes and reports.
+
+## Weekly Review
+
+1. Run `wsa weekly-report --date YYYY-MM-DD`.
+2. Review the sections for active follow-ups, manual enrichment, information gaps, and recent relationship changes.
+3. Do not send any drafted message without user confirmation.
 
 ## Explicit Watch Mode
 

@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.6）
+## Agent 生态（v0.7）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.6 提供 MCP stdio server、关系质量层、本地反馈闭环，以及从群聊/活动场景发现“值得认识的人”的候选人队列。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.7 提供 MCP stdio server、关系质量层、本地反馈闭环、群聊/活动候选人发现，以及可回读 Obsidian 手工补充的关系知识库。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.6 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`、`wsa://relationship-candidates`。截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.7 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-candidates`。截图、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -228,7 +228,7 @@ python3 -m wsa.cli analyze --min-score 0
 如果群聊里能识别出具体发言人，且该发言人有项目/合作等关系信号，跟进建议会优先指向这个群内联系人，并在原因和草稿里标出来源群，减少只对着群名跟进的情况。
 低强度轻量问候会尽量区分名片/自我介绍、个人想法、内容分享、纯链接/文件和项目推进；群内联系人也适用这套低分草稿。名片类内容会用更自然的“看到你的介绍”，个人想法类内容会先压成主题摘要再轻量关心近况，文章/公众号/报告等内容分享会顺着内容继续聊；如果这一屏只有链接或文件，草稿会保守写成“你分享的链接/文件我收到了”，避免把附件或文章分享硬说成“最近进展怎么样”。
 
-## 导出到 Obsidian
+## Obsidian 双向知识库
 
 可以把当前关系记忆导出到 Obsidian Vault 的 `社交圈` 目录：
 
@@ -241,11 +241,28 @@ python3 -m wsa.cli export-obsidian --vault "$HOME/Documents/Obsidian Vault"
 - `社交圈/人脉/联系人名.md`：每个联系人一个文件，包含来源群、身份/机构线索、带补充建议的资料缺口、最近联系内容、证据截图和下一步草稿。
 - `社交圈/人脉/索引.md`：先列出优先跟进对象和草稿，再按最近出现时间汇总联系人、群聊、来源、关系信号和资料缺口，适合每天快速扫一遍人脉库并立刻行动。
 - `社交圈/分析报告/YYYY-MM-DD.md`：每日分析报告，包含人脉结构分析、质量提示、有关系信号的人脉、最近出现的人脉、需要补充信息的人脉及补充建议、应该主动联系的人、原因和发送内容初稿。
+- `社交圈/分析报告/YYYY-Www.md`：周报，汇总本周应联系的人、手工补充、资料缺口和最近人脉变化。
 
 如果要指定报告日期：
 
 ```bash
 python3 -m wsa.cli export-obsidian --date 2026-05-27
+```
+
+联系人文件里的 `## 手工补充` 可以在 Obsidian 里编辑，支持 `公司`、`职位/角色`、`认识场景`、`标签`、`备注`、`下次跟进`。回读到本地数据库：
+
+```bash
+python3 -m wsa.cli import-obsidian --vault "$HOME/Documents/Obsidian Vault" --dry-run
+python3 -m wsa.cli import-obsidian --vault "$HOME/Documents/Obsidian Vault" --yes
+```
+
+导入后，手工补充会进入 `contact_enrichments` 表，并在下一次 `export-obsidian`、`contacts`、`profiles`、日报和周报里消解对应资料缺口。
+
+只生成周报到终端或文件：
+
+```bash
+python3 -m wsa.cli weekly-report --date 2026-05-27
+python3 -m wsa.cli weekly-report --out reports/weekly.md
 ```
 
 ## OCR 采集
