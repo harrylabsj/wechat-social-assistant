@@ -31,6 +31,13 @@
 4. If the user wants to promote one person, run `wsa candidate-confirm NAME --source-chat GROUP --yes` after confirmation.
 5. Re-run `wsa brief NAME` or `wsa quality --contact NAME --min-score 0` to inspect the confirmed person.
 
+## Local Source Import
+
+1. Confirm the user selected local files to import, such as `.vcf`, `.ics`, `.md`, `.txt`, Obsidian `社交圈/人脉`, or `.eml`.
+2. Run `wsa import-source PATH --dry-run` to preview parsed relationship sources.
+3. If the preview is expected, run `wsa import-source PATH --yes`.
+4. Run `wsa sources --contact NAME`, `wsa brief NAME`, or `wsa quality --contact NAME --min-score 0` to verify the contact-centered merge.
+
 ## Screenshot Import
 
 1. Confirm the user wants to import local screenshots.

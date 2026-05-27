@@ -41,13 +41,19 @@ from .relationship_quality import (
     quality_card_to_dict,
     render_relationship_quality_markdown,
 )
+from .sources import (
+    SOURCE_TYPES,
+    list_relationship_sources,
+    render_relationship_sources_markdown,
+    source_to_dict,
+)
 from .status import StatusReport, build_status_report, render_status_report
 from .store import connect, default_db_path
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "0.8.0"
 
 MCP_TOOLS = [
     {
@@ -141,6 +147,24 @@ MCP_TOOLS = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 "min_score": {"type": "integer", "minimum": 0, "default": 45},
                 "as_of": {"type": "string", "description": "Optional ISO timestamp for recency scoring."},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "list_relationship_sources",
+        "description": "Read locally imported relationship sources from contacts, calendars, notes, Obsidian, or email files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {"type": "string", "description": "Optional contact filter."},
+                "source_type": {
+                    "type": "string",
+                    "enum": list(SOURCE_TYPES),
+                    "description": "Optional source type filter.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
             },
             "additionalProperties": False,
@@ -266,6 +290,12 @@ MCP_RESOURCES = [
         "uri": "wsa://relationship-quality",
         "name": "WSA relationship quality",
         "description": "Evidence-backed relationship quality scores, risks, information gaps, and next actions.",
+        "mimeType": "text/markdown",
+    },
+    {
+        "uri": "wsa://relationship-sources",
+        "name": "WSA relationship sources",
+        "description": "Locally imported relationship sources from contacts, calendars, notes, Obsidian, and email files.",
         "mimeType": "text/markdown",
     },
     {
@@ -407,6 +437,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_daily_report": _tool_get_daily_report,
         "get_weekly_report": _tool_get_weekly_report,
         "get_relationship_quality": _tool_get_relationship_quality,
+        "list_relationship_sources": _tool_list_relationship_sources,
         "list_relationship_candidates": _tool_list_relationship_candidates,
         "confirm_relationship_candidate": _tool_confirm_relationship_candidate,
         "list_feedback": _tool_list_feedback,
@@ -443,6 +474,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
         tool_result = _tool_get_weekly_report(merged_arguments)
     elif normalized_uri == "wsa://relationship-quality":
         tool_result = _tool_get_relationship_quality(merged_arguments)
+    elif normalized_uri == "wsa://relationship-sources":
+        tool_result = _tool_list_relationship_sources(merged_arguments)
     elif normalized_uri == "wsa://relationship-candidates":
         tool_result = _tool_list_relationship_candidates(merged_arguments)
     else:
@@ -678,6 +711,32 @@ def _tool_get_relationship_quality(arguments: dict[str, Any]) -> dict[str, Any]:
             "contact_name": contact_name,
             "count": len(cards),
             "cards": [quality_card_to_dict(card) for card in cards],
+        },
+    )
+
+
+def _tool_list_relationship_sources(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    contact_name = _optional_str(arguments.get("contact_name") or arguments.get("contact"))
+    source_type = _optional_str(arguments.get("source_type") or arguments.get("type"))
+    limit = _limit(arguments.get("limit"), default=50)
+    records = (
+        list_relationship_sources(
+            db_path,
+            person_name=contact_name,
+            source_type=source_type,
+            limit=limit,
+        )
+        if db_path.exists()
+        else []
+    )
+    return _tool_result(
+        render_relationship_sources_markdown(records),
+        {
+            "contact_name": contact_name,
+            "source_type": source_type,
+            "count": len(records),
+            "sources": [source_to_dict(record) for record in records],
         },
     )
 

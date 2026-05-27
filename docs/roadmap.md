@@ -47,9 +47,13 @@
 - `export-obsidian` writes editable manual enrichment blocks, daily reports, and weekly reports.
 - MCP `get_weekly_report` and `wsa://weekly-report` expose weekly analysis read-only.
 
-## v0.8 Multi-Source Inputs
+## v0.8 Multi-Source Inputs - shipped
 
-- Add local-first connectors in this order: contacts, calendar, Obsidian, meeting notes, then email.
+- Add local-first imports for contacts, calendar, Obsidian people notes, meeting notes, and email files.
+- Store imported evidence in `relationship_sources` and merge it into contact-centered profiles, briefs, quality cards, reports, and search.
+- CLI `import-source` previews with `--dry-run` and requires `--yes` before writing local data.
+- CLI `sources` lists source evidence by contact or source type.
+- MCP `list_relationship_sources` and `wsa://relationship-sources` expose imported evidence read-only.
 
 ## v0.9 Relationship Dashboard
 

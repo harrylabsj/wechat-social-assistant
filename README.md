@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.7）
+## Agent 生态（v0.8）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.7 提供 MCP stdio server、关系质量层、本地反馈闭环、群聊/活动候选人发现，以及可回读 Obsidian 手工补充的关系知识库。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.8 提供 MCP stdio server、关系质量层、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库，以及本地多入口关系来源导入。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.7 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-candidates`。截图、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.8 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -221,6 +221,40 @@ python3 -m wsa.cli analyze --min-score 0
 群聊里遇到时间分隔线后，如果后续内容没有再次出现发言人姓名，系统会把它保留在群聊整体档案里，但不会继续归给上一位群内联系人；这能减少把自己右侧发出的消息误记到别人名下。
 群聊里的机构/公司线索也会按发言人消息块归因：某位群成员说“来自某机构”时，只会写入这位成员的档案，不会复制到同群所有联系人身上。
 群聊截图入库时，系统也会把识别到的群内发言人作为联系人写入本地 `people` 表；`analyze` 会对旧采集做一次回填，所以 `status` 里的 `contacts` 会同时包含私聊/群聊会话和已识别出的群内联系人。
+
+## 本地多入口来源
+
+除了微信可见截图，v0.8 可以导入用户主动提供的本地文件，并把它们合并到联系人档案、简报、关系质量、搜索和报告里。当前支持：
+
+- `.vcf` 通讯录：姓名、公司、职位、邮箱、电话、备注。
+- `.ics` 日历：活动标题、时间、描述、参会人。
+- `.md` / `.txt` 会议记录：标题、日期、参会人和摘要。
+- Obsidian Vault 的 `社交圈/人脉/*.md`：手工补充的人脉线索。
+- `.eml` 邮件：发件人、收件人、主题、日期和正文摘要。
+
+导入前先 dry-run：
+
+```bash
+python3 -m wsa.cli import-source ./contacts.vcf --dry-run
+python3 -m wsa.cli import-source ./calendar.ics ./meeting.md --dry-run
+```
+
+确认后写入本地数据库：
+
+```bash
+python3 -m wsa.cli import-source ./contacts.vcf --yes
+python3 -m wsa.cli import-source "$HOME/Documents/Obsidian Vault" --kind obsidian --yes
+```
+
+查看已经导入的来源：
+
+```bash
+python3 -m wsa.cli sources
+python3 -m wsa.cli sources --contact 张三
+python3 -m wsa.cli sources --type calendar
+```
+
+这些记录保存在本地 SQLite 的 `relationship_sources` 表中；不会读取微信私有数据库，也不会连接邮箱、通讯录或日历云账号。
 
 档案和跟进建议会尽量合并 OCR 因屏幕换行拆开的半句话，例如把 `OpenClaw 和` / `Hermes` 这类相邻行还原成一条更完整的内容。
 

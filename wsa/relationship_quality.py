@@ -502,6 +502,7 @@ def _kind_label(kind: str) -> str:
         "group": "群聊",
         "speaker": "群内联系人",
         "manual": "手工补充",
+        "source": "多入口来源",
     }.get(kind, kind)
 
 

@@ -1,6 +1,6 @@
 ---
 name: wechat-social-assistant
-description: "Use when the user wants a local-first WeChat relationship memory assistant: inspect wsa status, search contacts, summarize a contact, review relationship quality, discover group/event relationship candidates, review weekly reports, import/export Obsidian relationship notes, record local feedback, draft follow-ups, use the MCP server, analyze recent visible WeChat captures, import screenshots, or run/stop explicit watch mode."
+description: "Use when the user wants a local-first WeChat relationship memory assistant: inspect wsa status, search contacts, summarize a contact, review relationship quality, discover group/event relationship candidates, review weekly reports, import local relationship sources, import/export Obsidian relationship notes, record local feedback, draft follow-ups, use the MCP server, analyze recent visible WeChat captures, import screenshots, or run/stop explicit watch mode."
 ---
 
 # WeChat Social Assistant
@@ -12,9 +12,9 @@ Use this skill when the user asks to work with `wechat-social-assistant`, `wsa`,
 - Never send WeChat messages automatically.
 - Do not read or modify WeChat's private databases.
 - Do not bypass platform protections, inject into WeChat, or scrape encrypted stores.
-- Treat `watch`, `capture`, `import-image`, `ingest`, `feedback`, `candidate-confirm`, `candidates --sync`, `import-obsidian`, `analyze`, `export-obsidian`, `reset`, and `stop-watch` as write or process-control actions; explain the effect and get explicit user confirmation before running them.
-- The MCP server is mostly read-only in v0.7. `record_feedback` and `confirm_relationship_candidate` are write tools and require explicit user confirmation.
-- Prefer read-only commands first: `wsa status`, `wsa contacts`, `wsa brief`, `wsa quality`, `wsa candidates`, `wsa weekly-report`, `wsa next`, and `wsa suggest`.
+- Treat `watch`, `capture`, `import-image`, `ingest`, `feedback`, `candidate-confirm`, `candidates --sync`, `import-obsidian`, `import-source`, `analyze`, `export-obsidian`, `reset`, and `stop-watch` as write or process-control actions; explain the effect and get explicit user confirmation before running them.
+- The MCP server is mostly read-only in v0.8. `record_feedback` and `confirm_relationship_candidate` are write tools and require explicit user confirmation.
+- Prefer read-only commands first: `wsa status`, `wsa contacts`, `wsa brief`, `wsa quality`, `wsa candidates`, `wsa sources`, `wsa weekly-report`, `wsa next`, and `wsa suggest`.
 - Keep generated data local unless the user explicitly asks to publish, commit, or share it.
 
 ## Quick Start
@@ -27,8 +27,9 @@ Use this skill when the user asks to work with `wechat-social-assistant`, `wsa`,
 6. To grow the network from groups/events, run `wsa candidates`; only run `wsa candidates --sync` or `wsa candidate-confirm NAME --source-chat GROUP --yes` after confirmation.
 7. When the user reacts to a suggestion, record feedback with `wsa feedback NAME ACTION` after confirmation, then inspect it with `wsa feedback-list --contact NAME`.
 8. For weekly planning, use `wsa weekly-report`.
-9. For reports, use `wsa analyze` after user confirmation.
-10. For Obsidian export/import, use `wsa export-obsidian --vault PATH` or `wsa import-obsidian --vault PATH --yes` after user confirmation.
+9. To merge local sources such as vCard, ICS, notes, Obsidian people notes, or EML files, preview with `wsa import-source PATH --dry-run`, then import with `wsa import-source PATH --yes` after confirmation.
+10. For reports, use `wsa analyze` after user confirmation.
+11. For Obsidian export/import, use `wsa export-obsidian --vault PATH` or `wsa import-obsidian --vault PATH --yes` after user confirmation.
 
 ## Common Commands
 
@@ -41,6 +42,9 @@ wsa brief NAME
 wsa quality --contact NAME
 wsa candidates --min-confidence 45
 wsa candidate-confirm NAME --source-chat GROUP --yes
+wsa sources --contact NAME
+wsa import-source ./contacts.vcf --dry-run
+wsa import-source ./contacts.vcf --yes
 wsa weekly-report --date 2026-05-27
 wsa feedback-list --contact NAME
 wsa feedback NAME too_pushy --note "draft was too direct"

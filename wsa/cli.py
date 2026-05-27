@@ -25,6 +25,12 @@ from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_ca
 from .obsidian_memory import import_obsidian_enrichments
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
+from .sources import (
+    SOURCE_TYPES,
+    import_relationship_sources,
+    list_relationship_sources,
+    render_relationship_sources_markdown,
+)
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
 from .store import (
     EmptyCaptureError,
@@ -268,6 +274,24 @@ def build_parser() -> argparse.ArgumentParser:
     obsidian_import.add_argument("--dry-run", action="store_true", help="Preview importable enrichment without writing.")
     obsidian_import.add_argument("--imported-at", help="Override import timestamp for tests/imports.")
     obsidian_import.set_defaults(func=cmd_import_obsidian)
+
+    source_import = sub.add_parser(
+        "import-source",
+        help="Import local relationship sources such as contacts, calendars, meeting notes, Obsidian notes, or email files.",
+    )
+    source_import.add_argument("paths", type=Path, nargs="+", metavar="path")
+    source_import.add_argument("--kind", choices=["auto", *SOURCE_TYPES], default="auto")
+    source_import.add_argument("--yes", action="store_true", help="Required to write imported sources locally.")
+    source_import.add_argument("--dry-run", action="store_true", help="Preview importable sources without writing.")
+    source_import.add_argument("--imported-at", help="Override import timestamp for tests/imports.")
+    source_import.set_defaults(func=cmd_import_source)
+
+    sources = sub.add_parser("sources", help="List locally imported multi-source relationship records.")
+    sources.add_argument("--contact", help="Only list sources for one contact.")
+    sources.add_argument("--type", dest="source_type", choices=SOURCE_TYPES, help="Only list one source type.")
+    sources.add_argument("--limit", type=int, default=50)
+    sources.add_argument("--out", type=Path)
+    sources.set_defaults(func=cmd_sources)
 
     weekly = sub.add_parser("weekly-report", help="Render a weekly relationship report.")
     weekly.add_argument("--date", help="Any date inside the ISO week. Defaults to today.")
@@ -723,6 +747,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         f"feedback={result.removed_feedback} "
         f"candidates={result.removed_candidates} "
         f"enrichments={result.removed_enrichments} "
+        f"sources={result.removed_sources} "
         f"screenshots={result.removed_screenshots}"
     )
     return 0
@@ -897,6 +922,43 @@ def cmd_import_obsidian(args: argparse.Namespace) -> int:
         f"{prefix}: scanned={result.scanned_count} "
         f"parsed={result.parsed_count} imported={result.imported_count}"
     )
+    return 0
+
+
+def cmd_import_source(args: argparse.Namespace) -> int:
+    if not args.yes and not args.dry_run:
+        raise SystemExit("Use --yes to import relationship sources, or --dry-run to preview.")
+    result = import_relationship_sources(
+        args.db,
+        paths=args.paths,
+        kind=args.kind,
+        dry_run=args.dry_run,
+        imported_at=args.imported_at,
+    )
+    prefix = "dry-run" if result.dry_run else "imported relationship sources"
+    type_summary = _source_import_type_summary(result.by_type)
+    suffix = f" {type_summary}" if type_summary else ""
+    print(
+        f"{prefix}: scanned={result.scanned_count} parsed={result.parsed_count} "
+        f"imported={result.imported_count} duplicates={result.duplicate_count}{suffix}"
+    )
+    return 0
+
+
+def cmd_sources(args: argparse.Namespace) -> int:
+    records = list_relationship_sources(
+        args.db,
+        person_name=args.contact,
+        source_type=args.source_type,
+        limit=args.limit,
+    )
+    markdown = render_relationship_sources_markdown(records)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
     return 0
 
 
@@ -1146,6 +1208,7 @@ def _render_obsidian_daily_report(
         "私聊/单聊": sum(1 for profile in profiles if profile.kind == "direct"),
         "群聊": sum(1 for profile in profiles if profile.kind == "group"),
         "群内联系人": sum(1 for profile in profiles if profile.kind == "speaker"),
+        "多入口来源": sum(1 for profile in profiles if profile.kind == "source"),
     }
     signaled_profiles = [profile for profile in profiles if profile.signals]
     lines = [
@@ -1160,6 +1223,7 @@ def _render_obsidian_daily_report(
         f"- 私聊/单聊：{kind_counts['私聊/单聊']}",
         f"- 群聊：{kind_counts['群聊']}",
         f"- 群内联系人：{kind_counts['群内联系人']}",
+        f"- 多入口来源：{kind_counts['多入口来源']}",
         f"- 有关系信号的人脉：{len(signaled_profiles)}",
     ]
     quality_notes = status_quality_notes(status_report)
@@ -1236,6 +1300,7 @@ def _render_obsidian_weekly_report(
         "群聊": sum(1 for profile in profiles if profile.kind == "group"),
         "群内联系人": sum(1 for profile in profiles if profile.kind == "speaker"),
         "手工补充": sum(1 for profile in profiles if profile.kind == "manual"),
+        "多入口来源": sum(1 for profile in profiles if profile.kind == "source"),
     }
     gap_profiles = [
         profile
@@ -1254,6 +1319,7 @@ def _render_obsidian_weekly_report(
         f"- 私聊/单聊：{kind_counts['私聊/单聊']}",
         f"- 群聊：{kind_counts['群聊']}",
         f"- 群内联系人：{kind_counts['群内联系人']}",
+        f"- 多入口来源：{kind_counts['多入口来源']}",
         f"- 手工补充：{len(enrichments_by_person)}",
         "",
         "## 本周应主动联系",
@@ -1409,6 +1475,10 @@ def _format_matching_latest(profiles) -> str:
         ),
     )
     return f"{format_display_time(latest.last_seen_at)} {latest.name}"
+
+
+def _source_import_type_summary(by_type: dict[str, int]) -> str:
+    return " ".join(f"{source_type}={by_type[source_type]}" for source_type in SOURCE_TYPES if by_type.get(source_type))
 
 
 def _profiles_empty_message(query: str | None) -> str:
@@ -1801,6 +1871,7 @@ def _contact_kind_label(kind: str) -> str:
         "direct": "私聊/单聊",
         "speaker": "群内联系人",
         "manual": "手工补充",
+        "source": "多入口来源",
     }.get(kind, kind)
 
 

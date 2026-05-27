@@ -84,6 +84,22 @@ create table if not exists contact_enrichments (
     updated_at text not null
 );
 
+create table if not exists relationship_sources (
+    id integer primary key autoincrement,
+    person_name text not null,
+    source_type text not null,
+    title text not null default '',
+    occurred_at text,
+    summary text not null default '',
+    fields_json text not null default '{}',
+    raw_text text not null default '',
+    file_path text,
+    text_hash text not null,
+    imported_at text not null,
+    created_at text not null,
+    updated_at text not null
+);
+
 create index if not exists idx_people_last_interaction
 on people(last_interaction_at);
 
@@ -98,6 +114,15 @@ on relationship_candidates(status, confidence);
 
 create index if not exists idx_contact_enrichments_person
 on contact_enrichments(person_name);
+
+create index if not exists idx_relationship_sources_person_time
+on relationship_sources(person_name, occurred_at);
+
+create index if not exists idx_relationship_sources_type_time
+on relationship_sources(source_type, occurred_at);
+
+create unique index if not exists idx_relationship_sources_unique
+on relationship_sources(person_name, source_type, title, ifnull(occurred_at, ''), text_hash);
 """
 
 
@@ -122,6 +147,7 @@ class ResetResult:
     removed_feedback: int
     removed_candidates: int
     removed_enrichments: int
+    removed_sources: int
     removed_screenshots: int
     dry_run: bool = False
 
@@ -274,6 +300,7 @@ def reset_memory(
         removed_feedback = int(conn.execute("select count(*) from contact_feedback").fetchone()[0])
         removed_candidates = int(conn.execute("select count(*) from relationship_candidates").fetchone()[0])
         removed_enrichments = int(conn.execute("select count(*) from contact_enrichments").fetchone()[0])
+        removed_sources = int(conn.execute("select count(*) from relationship_sources").fetchone()[0])
         if not dry_run:
             conn.execute("delete from capture_signals")
             conn.execute("delete from captures")
@@ -281,6 +308,7 @@ def reset_memory(
             conn.execute("delete from contact_feedback")
             conn.execute("delete from relationship_candidates")
             conn.execute("delete from contact_enrichments")
+            conn.execute("delete from relationship_sources")
             conn.commit()
 
     screenshot_files = _screenshot_files(screenshots)
@@ -297,6 +325,7 @@ def reset_memory(
         removed_feedback=removed_feedback,
         removed_candidates=removed_candidates,
         removed_enrichments=removed_enrichments,
+        removed_sources=removed_sources,
         removed_screenshots=len(screenshot_files),
         dry_run=dry_run,
     )

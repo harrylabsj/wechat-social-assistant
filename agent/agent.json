@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -30,6 +30,7 @@
       "get_daily_report",
       "get_weekly_report",
       "get_relationship_quality",
+      "list_relationship_sources",
       "list_relationship_candidates",
       "confirm_relationship_candidate",
       "list_feedback",
@@ -42,6 +43,7 @@
       "wsa://daily-report",
       "wsa://weekly-report",
       "wsa://relationship-quality",
+      "wsa://relationship-sources",
       "wsa://relationship-candidates"
     ],
     "prompts": [
@@ -63,6 +65,7 @@
     "followup_suggestions",
     "daily_analysis",
     "weekly_analysis",
+    "multi_source_inputs",
     "mcp_read_only_interface",
     "obsidian_export",
     "obsidian_import",
@@ -147,6 +150,17 @@
       "example": "python3 -m wsa.cli import-obsidian --vault \"$HOME/Documents/Obsidian Vault\" --yes"
     },
     {
+      "name": "sources",
+      "mode": "read",
+      "example": "python3 -m wsa.cli sources --contact NAME"
+    },
+    {
+      "name": "import-source",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-source ./contacts.vcf --yes"
+    },
+    {
       "name": "import-image",
       "mode": "write-database",
       "requires_confirmation": true,
@@ -169,6 +183,7 @@
     "storage": "local-first",
     "database": "data/social.db by default",
     "manual_enrichment": "contact_enrichments rows inside data/social.db",
+    "relationship_sources": "relationship_sources rows inside data/social.db from user-provided local files",
     "screenshots": "data/captures by default",
     "reads_wechat_database": false,
     "sends_messages": false,

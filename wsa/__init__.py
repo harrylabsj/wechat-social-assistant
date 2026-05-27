@@ -11,4 +11,5 @@ __all__ = [
     "candidates",
     "enrichment",
     "obsidian_memory",
+    "sources",
 ]

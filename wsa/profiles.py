@@ -7,6 +7,7 @@ import re
 
 from .enrichment import ContactEnrichment, enrichment_by_person
 from .parser import TIME_RE, extract_signals, is_noise_line
+from .sources import RelationshipSource, sources_by_person
 from .store import connect
 from .timefmt import format_display_time
 
@@ -202,6 +203,7 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
                 speaker_builder.signals.update(speaker_signals.get(speaker, set()))
 
     _merge_enrichments(builders, db_path)
+    _merge_sources(builders, db_path)
     profiles = [builder.to_profile() for builder in builders.values()]
     profiles.sort(key=lambda profile: (profile.last_seen_at, profile.name), reverse=True)
     if limit is not None:
@@ -530,6 +532,68 @@ def _apply_enrichment(builder: _ProfileBuilder, enrichment: ContactEnrichment) -
         builder.add_recent(manual_notes)
 
 
+def _merge_sources(
+    builders: dict[tuple[str, str], _ProfileBuilder],
+    db_path: Path | str,
+) -> None:
+    for name, records in sources_by_person(db_path).items():
+        matching_builders = [builder for (kind, builder_name), builder in builders.items() if builder_name == name]
+        if not matching_builders:
+            builder = _ensure_builder(builders, name, "source")
+            builder.touch(_source_time(records[0]))
+            matching_builders = [builder]
+        for builder in matching_builders:
+            for record in records:
+                builder.touch(_source_time(record))
+                _apply_relationship_source(builder, record)
+
+
+def _apply_relationship_source(builder: _ProfileBuilder, source: RelationshipSource) -> None:
+    organizations = _source_organizations(source)
+    if organizations:
+        builder.add_organizations(organizations)
+    builder.add_identity_hints(_source_identity_hints(source))
+    recent = _source_recent_line(source)
+    if recent:
+        builder.add_recent([recent])
+
+
+def _source_time(source: RelationshipSource) -> str:
+    return source.occurred_at or source.imported_at or source.updated_at or ""
+
+
+def _source_organizations(source: RelationshipSource) -> list[str]:
+    organizations = []
+    for key in ("company", "org", "organization", "机构", "公司"):
+        value = source.fields.get(key)
+        if value and value not in organizations:
+            organizations.append(value)
+    return organizations
+
+
+def _source_identity_hints(source: RelationshipSource) -> list[str]:
+    hints = [f"来源：{source.source_type}：{source.title}"]
+    for key, label in (
+        ("role", "职位/角色"),
+        ("title", "职位/角色"),
+        ("context", "认识场景"),
+        ("tags", "标签"),
+        ("email", "邮箱"),
+        ("phone", "电话"),
+    ):
+        value = source.fields.get(key)
+        if value:
+            hints.append(f"{label}：{value}")
+    return hints
+
+
+def _source_recent_line(source: RelationshipSource) -> str:
+    parts = [f"{source.source_type}：{source.title}"]
+    if source.summary:
+        parts.append(source.summary)
+    return " - ".join(parts)
+
+
 def _is_speaker_name(candidate: str, *, chat_name: str) -> bool:
     if not candidate or candidate == chat_name:
         return False
@@ -696,6 +760,7 @@ def _kind_label(kind: str) -> str:
         "direct": "私聊/单聊",
         "speaker": "群内联系人",
         "manual": "手工补充",
+        "source": "多入口来源",
     }.get(kind, kind)
 
 
