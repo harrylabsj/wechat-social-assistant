@@ -1,0 +1,100 @@
+{
+  "schema_version": "2026-05-27",
+  "id": "wechat-social-assistant",
+  "name": "WeChat Social Assistant",
+  "version": "0.2.0",
+  "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
+  "ecosystems": [
+    "hermes",
+    "openclaw-non-plugin",
+    "codex",
+    "claude-code"
+  ],
+  "cli": {
+    "entrypoint": "python3 -m wsa.cli",
+    "console_script": "wsa",
+    "doctor": "agent/hermes/wechat-social-assistant/scripts/doctor.py",
+    "runner": "agent/hermes/wechat-social-assistant/scripts/wsa_run.py"
+  },
+  "capabilities": [
+    "local_status",
+    "contact_search",
+    "contact_brief",
+    "followup_suggestions",
+    "daily_analysis",
+    "obsidian_export",
+    "ocr_import",
+    "explicit_watch_mode"
+  ],
+  "commands": [
+    {
+      "name": "status",
+      "mode": "read",
+      "example": "python3 -m wsa.cli status"
+    },
+    {
+      "name": "contacts",
+      "mode": "read",
+      "example": "python3 -m wsa.cli contacts --query NAME"
+    },
+    {
+      "name": "brief",
+      "mode": "read",
+      "example": "python3 -m wsa.cli brief NAME"
+    },
+    {
+      "name": "next",
+      "mode": "read",
+      "example": "python3 -m wsa.cli next --contact NAME"
+    },
+    {
+      "name": "suggest",
+      "mode": "read",
+      "example": "python3 -m wsa.cli suggest --contact NAME"
+    },
+    {
+      "name": "analyze",
+      "mode": "write-reports",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli analyze"
+    },
+    {
+      "name": "export-obsidian",
+      "mode": "write-files",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli export-obsidian --vault \"$HOME/Documents/Obsidian Vault\""
+    },
+    {
+      "name": "import-image",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-image ./screenshot.png --contact NAME"
+    },
+    {
+      "name": "watch",
+      "mode": "capture",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli watch --interval 60"
+    },
+    {
+      "name": "stop-watch",
+      "mode": "process-control",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli stop-watch"
+    }
+  ],
+  "data_policy": {
+    "storage": "local-first",
+    "database": "data/social.db by default",
+    "screenshots": "data/captures by default",
+    "reads_wechat_database": false,
+    "sends_messages": false,
+    "requires_user_confirmation_for_writes": true,
+    "auditability": "Commands print affected paths and process state; generated files stay local unless the user publishes them."
+  },
+  "install": {
+    "from_repo": "python3 -m pip install git+https://github.com/harrylabsj/wechat-social-assistant.git",
+    "from_checkout": "python3 -m pip install -e .",
+    "hermes_skill": "hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes"
+  }
+}

@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+
+READ_COMMANDS = {
+    "status",
+    "contacts",
+    "brief",
+    "next",
+    "suggest",
+    "profiles",
+    "ocr-image",
+}
+WRITE_COMMANDS = {
+    "init",
+    "ingest",
+    "capture",
+    "import-image",
+    "ingest-image",
+    "analyze",
+    "export-obsidian",
+    "watch",
+    "stop-watch",
+    "stop",
+    "reset",
+}
+ALL_COMMANDS = tuple(sorted(READ_COMMANDS | WRITE_COMMANDS))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Portable wrapper for confirmed wsa CLI calls.")
+    parser.add_argument("--list-commands", action="store_true", help="List allowed wsa commands and exit.")
+    parser.add_argument("--project-root", type=Path, help="Run from a specific source checkout.")
+    parser.add_argument("--confirm", action="store_true", help="Required for commands that write files, mutate data, or control processes.")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments to pass after python3 -m wsa.cli.")
+    parsed = parser.parse_args(argv)
+
+    if parsed.list_commands:
+        print("\n".join(ALL_COMMANDS))
+        return 0
+    if not parsed.args:
+        parser.error("provide a wsa command or use --list-commands")
+
+    command = parsed.args[0]
+    if command not in ALL_COMMANDS:
+        parser.error(f"unsupported wsa command: {command}")
+    if command in WRITE_COMMANDS and not parsed.confirm:
+        parser.error(f"{command} requires --confirm because it can write local state or control a process")
+
+    project_root = parsed.project_root or Path(__file__).resolve().parents[4]
+    return subprocess.call([sys.executable, "-m", "wsa.cli", *parsed.args], cwd=project_root)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -4,6 +4,30 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
+## Agent 生态（v0.2）
+
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。
+
+仓库提供：
+
+- `agent/agent.json`：通用 agent manifest，描述命令、权限、数据边界和安装方式。
+- `agent/hermes/wechat-social-assistant/SKILL.md`：Hermes Skill，可让 agent 按安全流程调用本地 `wsa`。
+- `agent/hermes/wechat-social-assistant/scripts/doctor.py`：本地自检脚本。
+- `agent/openclaw/wechat-social-assistant.md`：OpenClaw 非插件使用说明。
+- `docs/roadmap.md`：从 v0.2 到 v1.0 的产品路线图。
+
+Hermes 可用 raw URL 安装：
+
+```bash
+hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes
+```
+
+本地自检：
+
+```bash
+python3 agent/hermes/wechat-social-assistant/scripts/doctor.py
+```
+
 ## 快速开始
 
 ```bash
