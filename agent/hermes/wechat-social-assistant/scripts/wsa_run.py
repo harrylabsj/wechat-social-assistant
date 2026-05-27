@@ -11,6 +11,7 @@ READ_COMMANDS = {
     "status",
     "contacts",
     "brief",
+    "quality",
     "next",
     "suggest",
     "profiles",

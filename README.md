@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.3）
+## Agent 生态（v0.4）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.3 额外提供只读 MCP stdio server，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 直接查询本地关系记忆。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.4 提供只读 MCP stdio server 和关系质量层，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 直接查询本地关系记忆。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.3 暴露的 MCP tools 全部只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`list_recent_captures`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`。写入、截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.4 暴露的 MCP tools 全部只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_recent_captures`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`。写入、截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -97,6 +97,15 @@ python3 -m wsa.cli brief 示例资本
 `brief` 会复用联系人过滤规则，用姓名、来源群、机构、身份线索、链接、文件或最近内容定位联系人；可以直接写 `brief 群成员A`，也可以用和 `suggest`/`profiles`/`next` 一致的 `brief --contact 群成员A`。它默认显示低优先级的轻量问候草稿，适合在真正发微信前快速确认“这个人是谁、来自哪里、最近聊了什么、下一句可以怎么开口”。精确匹配联系人姓名时会优先展示这个人；如果线索同时命中群聊和群内联系人，简报会列出所有匹配对象，并单独标明下一步建议实际面向谁；下一步里也会显示跟进强度，避免把低分轻量问候误当成必须立即发送。
 简报还会显示“最近采集证据”，包括会话名、采集时间、来源和截图路径；如果简报里有下一步建议，证据会优先跟随建议对象，群内联系人会按群聊发言人解析回溯到来源群里的最近本人发言截图，避免把“别人提到这个人”的截图误当成他的发言证据。
 如果给 `brief` 设置了更高的 `--min-score`，而草稿只是被阈值过滤掉，简报会在“下一步”里说明当前阈值、最高分和 `--min-score 0` 的查看方式。
+
+查看关系质量层，也就是“关系运营台”：
+
+```bash
+python3 -m wsa.cli quality
+python3 -m wsa.cli quality --contact 群成员A --min-score 0
+```
+
+`quality` 会按联系人生成可解释的关系质量卡，包含总分、关系强度、最近互动、互惠、场景、风险、资料缺口和下一步动作。每个分数都会附带本地采集证据，包括来源会话、采集时间、摘要和截图路径（如果有），避免出现无法追溯的玄学评分。
 
 只查看当前最值得跟进的一条，并直接显示可改写的微信草稿：
 

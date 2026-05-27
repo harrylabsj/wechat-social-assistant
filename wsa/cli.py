@@ -10,6 +10,7 @@ import time
 
 from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
+from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
 from .store import (
     EmptyCaptureError,
@@ -162,6 +163,14 @@ def build_parser() -> argparse.ArgumentParser:
     profiles.add_argument("--title", default="联系人关系档案")
     profiles.add_argument("--out", type=Path)
     profiles.set_defaults(func=cmd_profiles)
+
+    quality = sub.add_parser("quality", help="Render the relationship quality operating desk.")
+    quality.add_argument("--contact", help="Only include quality cards matching this contact or source chat.")
+    quality.add_argument("--limit", type=int, default=20)
+    quality.add_argument("--min-score", type=int, default=45, help="Only use suggestions with score >= N for next actions.")
+    quality.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
+    quality.add_argument("--out", type=Path)
+    quality.set_defaults(func=cmd_quality)
 
     status = sub.add_parser("status", help="Summarize database, screenshots, and watch log state.")
     status.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
@@ -514,6 +523,27 @@ def cmd_profiles(args: argparse.Namespace) -> int:
         title=args.title,
         empty_message=_profiles_empty_message(args.contact),
     )
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_quality(args: argparse.Namespace) -> int:
+    init_db(args.db)
+    profiles = build_profiles(args.db)
+    profiles = _filter_profiles(profiles, args.contact)
+    cards = build_relationship_quality_cards(
+        args.db,
+        profiles=profiles,
+        as_of=args.as_of,
+        limit=args.limit,
+        min_suggestion_score=args.min_score,
+    )
+    markdown = render_relationship_quality_markdown(cards)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(markdown, encoding="utf-8")

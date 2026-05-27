@@ -22,6 +22,7 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_contact_brief",
                 "get_next_followup",
                 "get_daily_report",
+                "get_relationship_quality",
                 "list_recent_captures",
             ],
             tool_names,
@@ -43,7 +44,7 @@ class MCPServerContractTests(unittest.TestCase):
 
         self.assertGreaterEqual(
             {resource["uri"] for resource in mcp_server.MCP_RESOURCES},
-            {"wsa://status", "wsa://contacts", "wsa://daily-report"},
+            {"wsa://status", "wsa://contacts", "wsa://daily-report", "wsa://relationship-quality"},
         )
         self.assertGreaterEqual(
             {prompt["name"] for prompt in mcp_server.MCP_PROMPTS},
@@ -93,6 +94,7 @@ class MCPServerContractTests(unittest.TestCase):
             brief = _call_tool("get_contact_brief", db_path=db_path, contact_name="张三")
             followup = _call_tool("get_next_followup", db_path=db_path, contact_name="张三", min_score=0)
             daily = _call_tool("get_daily_report", db_path=db_path, date="2026-05-27", min_score=0)
+            quality = _call_tool("get_relationship_quality", db_path=db_path, contact_name="张三", min_score=0)
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
@@ -105,6 +107,10 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("draft", followup["structuredContent"]["suggestion"])
         self.assertIn("# 社交圈分析报告 2026-05-27", daily["content"][0]["text"])
         self.assertIn("followups", daily["structuredContent"])
+        self.assertIn("# 关系运营台", quality["content"][0]["text"])
+        self.assertEqual("张三", quality["structuredContent"]["cards"][0]["name"])
+        self.assertIn("relationship_strength", quality["structuredContent"]["cards"][0]["scores"])
+        self.assertTrue(quality["structuredContent"]["cards"][0]["scores"]["relationship_strength"]["evidence"])
         self.assertEqual(2, len(recent["structuredContent"]["captures"]))
         self.assertEqual("增长交流群（3）", recent["structuredContent"]["captures"][0]["contact_name"])
 
@@ -132,11 +138,21 @@ class MCPServerContractTests(unittest.TestCase):
                     },
                 }
             )
+            quality = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "resources/read",
+                    "params": {"uri": "wsa://relationship-quality", "arguments": {"db_path": str(db_path)}},
+                }
+            )
 
         self.assertEqual("wsa://status", status["result"]["contents"][0]["uri"])
         self.assertIn("# WeChat Social Assistant Status", status["result"]["contents"][0]["text"])
         self.assertIn("张三", prompt["result"]["messages"][0]["content"]["text"])
         self.assertIn("只读", prompt["result"]["messages"][0]["content"]["text"])
+        self.assertEqual("wsa://relationship-quality", quality["result"]["contents"][0]["uri"])
+        self.assertIn("# 关系运营台", quality["result"]["contents"][0]["text"])
 
     def test_module_cli_help_is_available(self):
         result = subprocess.run(

@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -27,24 +27,27 @@
       "get_contact_brief",
       "get_next_followup",
       "get_daily_report",
+      "get_relationship_quality",
       "list_recent_captures"
     ],
     "resources": [
       "wsa://status",
       "wsa://contacts",
-      "wsa://daily-report"
+      "wsa://daily-report",
+      "wsa://relationship-quality"
     ],
     "prompts": [
       "daily-relationship-review",
       "contact-followup",
       "safe-capture-review"
     ],
-    "write_policy": "No mutating MCP tools are exposed in v0.3; use confirmed CLI commands for writes."
+    "write_policy": "No mutating MCP tools are exposed in v0.4; use confirmed CLI commands for writes."
   },
   "capabilities": [
     "local_status",
     "contact_search",
     "contact_brief",
+    "relationship_quality",
     "followup_suggestions",
     "daily_analysis",
     "mcp_read_only_interface",
@@ -67,6 +70,11 @@
       "name": "brief",
       "mode": "read",
       "example": "python3 -m wsa.cli brief NAME"
+    },
+    {
+      "name": "quality",
+      "mode": "read",
+      "example": "python3 -m wsa.cli quality --contact NAME"
     },
     {
       "name": "next",

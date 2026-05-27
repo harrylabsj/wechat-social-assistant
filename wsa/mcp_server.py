@@ -20,13 +20,18 @@ from .cli import (
     _render_obsidian_daily_report,
 )
 from .profiles import ContactProfile, build_profiles
+from .relationship_quality import (
+    build_relationship_quality_cards,
+    quality_card_to_dict,
+    render_relationship_quality_markdown,
+)
 from .status import StatusReport, build_status_report, render_status_report
 from .store import connect, default_db_path
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 
 MCP_TOOLS = [
     {
@@ -97,6 +102,21 @@ MCP_TOOLS = [
         },
     },
     {
+        "name": "get_relationship_quality",
+        "description": "Read the relationship quality operating desk with evidence-backed scores, risks, gaps, and next actions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {"type": "string", "description": "Optional contact or source chat filter."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "min_score": {"type": "integer", "minimum": 0, "default": 45},
+                "as_of": {"type": "string", "description": "Optional ISO timestamp for recency scoring."},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "list_recent_captures",
         "description": "List recent captured conversation records and metadata without reading image bytes.",
         "inputSchema": {
@@ -127,6 +147,12 @@ MCP_RESOURCES = [
         "uri": "wsa://daily-report",
         "name": "WSA daily report",
         "description": "Daily relationship analysis and proactive follow-up drafts rendered in memory.",
+        "mimeType": "text/markdown",
+    },
+    {
+        "uri": "wsa://relationship-quality",
+        "name": "WSA relationship quality",
+        "description": "Evidence-backed relationship quality scores, risks, information gaps, and next actions.",
         "mimeType": "text/markdown",
     },
 ]
@@ -246,6 +272,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_contact_brief": _tool_get_contact_brief,
         "get_next_followup": _tool_get_next_followup,
         "get_daily_report": _tool_get_daily_report,
+        "get_relationship_quality": _tool_get_relationship_quality,
         "list_recent_captures": _tool_list_recent_captures,
     }
     handler = handlers.get(name)
@@ -274,6 +301,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
         tool_result = _tool_search_contacts(merged_arguments)
     elif normalized_uri == "wsa://daily-report":
         tool_result = _tool_get_daily_report(merged_arguments)
+    elif normalized_uri == "wsa://relationship-quality":
+        tool_result = _tool_get_relationship_quality(merged_arguments)
     else:
         raise ValueError(f"unknown resource uri: {uri}")
     return {
@@ -436,6 +465,32 @@ def _tool_get_daily_report(arguments: dict[str, Any]) -> dict[str, Any]:
             "profile_count": len(profiles),
             "followups": [_suggestion_to_dict(suggestion) for suggestion in followups],
             "status": _status_to_dict(status_report),
+        },
+    )
+
+
+def _tool_get_relationship_quality(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    contact_name = _optional_str(arguments.get("contact_name") or arguments.get("contact"))
+    limit = _limit(arguments.get("limit"), default=20)
+    min_score = _min_score(arguments.get("min_score"), default=45)
+    profiles = _profiles_or_empty(db_path)
+    profiles = _filter_profiles(profiles, contact_name)
+    cards = build_relationship_quality_cards(
+        db_path,
+        profiles=profiles,
+        as_of=_optional_str(arguments.get("as_of")),
+        limit=limit,
+        min_suggestion_score=min_score,
+    )
+    cards = _prioritize_exact_cards(cards, contact_name)
+    markdown = render_relationship_quality_markdown(cards)
+    return _tool_result(
+        markdown,
+        {
+            "contact_name": contact_name,
+            "count": len(cards),
+            "cards": [quality_card_to_dict(card) for card in cards],
         },
     )
 
@@ -608,6 +663,24 @@ def _preview(text: str, *, max_length: int = 160) -> str:
     if len(preview) <= max_length:
         return preview
     return preview[: max_length - 1].rstrip() + "…"
+
+
+def _prioritize_exact_cards(cards, query: str | None):
+    if not query:
+        return cards
+    normalized_query = _normalize_match_text(query)
+    return sorted(
+        cards,
+        key=lambda card: (
+            0 if card.name.lower() == query.lower() or _normalize_match_text(card.name) == normalized_query else 1,
+            -card.overall.score,
+            card.name,
+        ),
+    )
+
+
+def _normalize_match_text(value: str) -> str:
+    return "".join(character for character in value.lower() if character.isalnum())
 
 
 def _query_arguments(query: str) -> dict[str, str]:

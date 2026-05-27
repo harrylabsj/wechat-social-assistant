@@ -19,8 +19,8 @@ python3 -m pip install "git+https://github.com/harrylabsj/wechat-social-assistan
 ## Operating Model
 
 - Use `wsa status` before making recommendations.
-- Use read-only commands for exploration: `contacts`, `brief`, `next`, `suggest`, and `profiles`.
-- For MCP-native operation, configure command `wsa-mcp` or `python3 -m wsa.mcp_server`; v0.3 MCP tools are read-only.
+- Use read-only commands for exploration: `contacts`, `brief`, `quality`, `next`, `suggest`, and `profiles`.
+- For MCP-native operation, configure command `wsa-mcp` or `python3 -m wsa.mcp_server`; v0.4 MCP tools are read-only.
 - Ask for explicit user confirmation before commands that capture screenshots, import images, write reports, export to Obsidian, reset memory, start watch mode, or stop processes.
 - Keep all database, screenshot, and report files local unless the user explicitly asks to publish them.
 
@@ -36,6 +36,7 @@ Use the local wechat-social-assistant CLI. Start with `wsa status`. Do not read 
 wsa status
 wsa contacts --query NAME
 wsa brief NAME
+wsa quality --contact NAME
 wsa next --contact NAME
 wsa-mcp
 python3 -m wsa.mcp_server
