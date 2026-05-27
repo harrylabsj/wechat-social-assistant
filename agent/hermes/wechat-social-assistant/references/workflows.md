@@ -3,10 +3,11 @@
 ## Daily Review
 
 1. Run `wsa status`.
-2. Run `wsa next` for the top follow-up.
-3. If the user says the suggestion is done, irrelevant, too pushy, or useful, record that with `wsa feedback NAME ACTION` after confirmation.
-4. If the user asks for broader planning, run `wsa analyze` after confirmation.
-5. Read `reports/outreach.md` and `reports/contact-profiles.md`.
+2. Run `wsa dashboard` for the operating view.
+3. Run `wsa next` for the top follow-up when the user wants a single draft.
+4. If the user says the suggestion is done, irrelevant, too pushy, or useful, record that with `wsa feedback NAME ACTION` after confirmation.
+5. If the user asks for broader planning, run `wsa analyze` after confirmation.
+6. Read `reports/outreach.md` and `reports/contact-profiles.md`.
 
 ## Contact Lookup
 

@@ -14,6 +14,7 @@ from .candidates import (
     render_candidates_markdown,
     sync_relationship_candidates,
 )
+from .dashboard import build_relationship_dashboard, render_relationship_dashboard_markdown
 from .enrichment import (
     ContactEnrichment,
     ENRICHMENT_FIELDS,
@@ -191,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     quality.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     quality.add_argument("--out", type=Path)
     quality.set_defaults(func=cmd_quality)
+
+    dashboard = sub.add_parser("dashboard", help="Render the daily relationship operating dashboard.")
+    dashboard.add_argument("--limit", type=int, default=8)
+    dashboard.add_argument("--min-score", type=int, default=45, help="Minimum follow-up score for priority contacts.")
+    dashboard.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
+    dashboard.add_argument("--out", type=Path)
+    dashboard.set_defaults(func=cmd_dashboard)
 
     candidates = sub.add_parser("candidates", help="Discover relationship candidates from group/event contexts.")
     candidates.add_argument("--min-confidence", type=int, default=45, help="Only include candidates with confidence >= N.")
@@ -635,6 +643,23 @@ def cmd_quality(args: argparse.Namespace) -> int:
         min_suggestion_score=args.min_score,
     )
     markdown = render_relationship_quality_markdown(cards)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    dashboard = build_relationship_dashboard(
+        args.db,
+        as_of=args.as_of,
+        limit=args.limit,
+        min_score=args.min_score,
+    )
+    markdown = render_relationship_dashboard_markdown(dashboard)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(markdown, encoding="utf-8")

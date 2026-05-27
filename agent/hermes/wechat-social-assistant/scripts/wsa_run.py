@@ -13,6 +13,7 @@ READ_COMMANDS = {
     "feedback-list",
     "brief",
     "quality",
+    "dashboard",
     "candidates",
     "sources",
     "weekly-report",

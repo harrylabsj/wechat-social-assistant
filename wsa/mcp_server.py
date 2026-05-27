@@ -27,6 +27,11 @@ from .candidates import (
     discover_relationship_candidates,
     render_candidates_markdown,
 )
+from .dashboard import (
+    build_relationship_dashboard,
+    dashboard_to_dict,
+    render_relationship_dashboard_markdown,
+)
 from .enrichment import enrichment_by_person, enrichment_to_dict
 from .feedback import (
     FEEDBACK_ACTIONS,
@@ -53,7 +58,7 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.8.0"
+SERVER_VERSION = "0.9.0"
 
 MCP_TOOLS = [
     {
@@ -147,6 +152,21 @@ MCP_TOOLS = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 "min_score": {"type": "integer", "minimum": 0, "default": 45},
                 "as_of": {"type": "string", "description": "Optional ISO timestamp for recency scoring."},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_relationship_dashboard",
+        "description": "Read the daily relationship dashboard: priorities, cooling contacts, candidates, commitments, and group signals.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "Optional analysis date or ISO timestamp."},
+                "as_of": {"type": "string", "description": "Optional ISO timestamp for recency scoring."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 8},
+                "min_score": {"type": "integer", "minimum": 0, "default": 45},
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
             },
             "additionalProperties": False,
@@ -290,6 +310,12 @@ MCP_RESOURCES = [
         "uri": "wsa://relationship-quality",
         "name": "WSA relationship quality",
         "description": "Evidence-backed relationship quality scores, risks, information gaps, and next actions.",
+        "mimeType": "text/markdown",
+    },
+    {
+        "uri": "wsa://relationship-dashboard",
+        "name": "WSA relationship dashboard",
+        "description": "Daily relationship operating dashboard for priorities, cooling contacts, candidates, commitments, and groups.",
         "mimeType": "text/markdown",
     },
     {
@@ -437,6 +463,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_daily_report": _tool_get_daily_report,
         "get_weekly_report": _tool_get_weekly_report,
         "get_relationship_quality": _tool_get_relationship_quality,
+        "get_relationship_dashboard": _tool_get_relationship_dashboard,
         "list_relationship_sources": _tool_list_relationship_sources,
         "list_relationship_candidates": _tool_list_relationship_candidates,
         "confirm_relationship_candidate": _tool_confirm_relationship_candidate,
@@ -474,6 +501,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
         tool_result = _tool_get_weekly_report(merged_arguments)
     elif normalized_uri == "wsa://relationship-quality":
         tool_result = _tool_get_relationship_quality(merged_arguments)
+    elif normalized_uri == "wsa://relationship-dashboard":
+        tool_result = _tool_get_relationship_dashboard(merged_arguments)
     elif normalized_uri == "wsa://relationship-sources":
         tool_result = _tool_list_relationship_sources(merged_arguments)
     elif normalized_uri == "wsa://relationship-candidates":
@@ -712,6 +741,20 @@ def _tool_get_relationship_quality(arguments: dict[str, Any]) -> dict[str, Any]:
             "count": len(cards),
             "cards": [quality_card_to_dict(card) for card in cards],
         },
+    )
+
+
+def _tool_get_relationship_dashboard(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    dashboard = build_relationship_dashboard(
+        db_path,
+        as_of=_optional_str(arguments.get("as_of") or arguments.get("date")),
+        limit=_limit(arguments.get("limit"), default=8),
+        min_score=_min_score(arguments.get("min_score"), default=45),
+    )
+    return _tool_result(
+        render_relationship_dashboard_markdown(dashboard),
+        {"dashboard": dashboard_to_dict(dashboard)},
     )
 
 

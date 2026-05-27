@@ -55,9 +55,11 @@
 - CLI `sources` lists source evidence by contact or source type.
 - MCP `list_relationship_sources` and `wsa://relationship-sources` expose imported evidence read-only.
 
-## v0.9 Relationship Dashboard
+## v0.9 Relationship Dashboard - shipped
 
-- Provide a daily operating view: who to contact, why, what to say, cooling relationships, promising new people, unresolved commitments, high-value groups, and noisy groups.
+- Provide a daily relationship dashboard: priority follow-ups, cooling contacts, candidate opportunities, open commitments, high-value groups, noisy groups, and fresh source updates.
+- CLI `dashboard` renders the operating view in Markdown.
+- MCP `get_relationship_dashboard` and `wsa://relationship-dashboard` expose the dashboard read-only to agent ecosystems.
 
 ## v1.0 Local Relationship OS
 

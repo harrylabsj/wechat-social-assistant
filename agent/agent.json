@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -30,6 +30,7 @@
       "get_daily_report",
       "get_weekly_report",
       "get_relationship_quality",
+      "get_relationship_dashboard",
       "list_relationship_sources",
       "list_relationship_candidates",
       "confirm_relationship_candidate",
@@ -43,6 +44,7 @@
       "wsa://daily-report",
       "wsa://weekly-report",
       "wsa://relationship-quality",
+      "wsa://relationship-dashboard",
       "wsa://relationship-sources",
       "wsa://relationship-candidates"
     ],
@@ -65,6 +67,7 @@
     "followup_suggestions",
     "daily_analysis",
     "weekly_analysis",
+    "relationship_dashboard",
     "multi_source_inputs",
     "mcp_read_only_interface",
     "obsidian_export",
@@ -93,6 +96,11 @@
       "name": "quality",
       "mode": "read",
       "example": "python3 -m wsa.cli quality --contact NAME"
+    },
+    {
+      "name": "dashboard",
+      "mode": "read",
+      "example": "python3 -m wsa.cli dashboard"
     },
     {
       "name": "candidates",

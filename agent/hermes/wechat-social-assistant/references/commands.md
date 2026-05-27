@@ -7,6 +7,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa status` - inspect database, screenshots, logs, and watch state.
 - `wsa contacts --query NAME` - find known contacts, groups, speakers, organizations, and identity hints.
 - `wsa brief NAME` - summarize one contact or matching set of contacts.
+- `wsa dashboard` - render the daily relationship operating dashboard.
 - `wsa quality --contact NAME` - render evidence-backed relationship quality, risks, gaps, and next actions.
 - `wsa candidates --min-confidence 45` - discover group/event relationship candidates without writing by default.
 - `wsa sources --contact NAME` - list locally imported relationship sources for a contact.
@@ -21,7 +22,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v0.8 MCP server exposes read tools: `get_status`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, and `list_recent_captures`. Write tools are `record_feedback` and `confirm_relationship_candidate`, and both require explicit confirmation arguments. It also exposes `wsa://status`, `wsa://contacts`, `wsa://daily-report`, `wsa://weekly-report`, `wsa://relationship-quality`, `wsa://relationship-sources`, `wsa://relationship-candidates`, plus prompts for daily review, weekly review, contact follow-up, relationship candidate review, and safe capture review.
+The v0.9 MCP server exposes read tools: `get_status`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, and `list_recent_captures`. Write tools are `record_feedback` and `confirm_relationship_candidate`, and both require explicit confirmation arguments. It also exposes `wsa://status`, `wsa://contacts`, `wsa://daily-report`, `wsa://weekly-report`, `wsa://relationship-quality`, `wsa://relationship-dashboard`, `wsa://relationship-sources`, `wsa://relationship-candidates`, plus prompts for daily review, weekly review, contact follow-up, relationship candidate review, and safe capture review.
 
 ## Confirm Before Running
 

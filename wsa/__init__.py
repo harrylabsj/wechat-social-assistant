@@ -6,6 +6,7 @@ __all__ = [
     "suggestions",
     "ocr",
     "mcp_server",
+    "dashboard",
     "relationship_quality",
     "feedback",
     "candidates",

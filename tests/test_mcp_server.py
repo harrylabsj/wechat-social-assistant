@@ -24,6 +24,7 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_daily_report",
                 "get_weekly_report",
                 "get_relationship_quality",
+                "get_relationship_dashboard",
                 "list_relationship_sources",
                 "list_relationship_candidates",
                 "confirm_relationship_candidate",
@@ -102,6 +103,7 @@ class MCPServerContractTests(unittest.TestCase):
             daily = _call_tool("get_daily_report", db_path=db_path, date="2026-05-27", min_score=0)
             weekly = _call_tool("get_weekly_report", db_path=db_path, date="2026-05-27", min_score=0)
             quality = _call_tool("get_relationship_quality", db_path=db_path, contact_name="张三", min_score=0)
+            dashboard = _call_tool("get_relationship_dashboard", db_path=db_path, date="2026-05-27", min_score=0)
             sources = _call_tool("list_relationship_sources", db_path=db_path, contact_name="张三")
             candidates = _call_tool("list_relationship_candidates", db_path=db_path, min_confidence=0)
             feedback = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
@@ -120,6 +122,8 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("# 社交圈周报 2026-W22", weekly["content"][0]["text"])
         self.assertEqual("2026-W22", weekly["structuredContent"]["week"])
         self.assertIn("# 关系运营台", quality["content"][0]["text"])
+        self.assertIn("# 关系驾驶舱", dashboard["content"][0]["text"])
+        self.assertIn("dashboard", dashboard["structuredContent"])
         self.assertIn("sources", sources["structuredContent"])
         self.assertEqual("张三", quality["structuredContent"]["cards"][0]["name"])
         self.assertIn("relationship_strength", quality["structuredContent"]["cards"][0]["scores"])
@@ -162,6 +166,14 @@ class MCPServerContractTests(unittest.TestCase):
                     "params": {"uri": "wsa://relationship-quality", "arguments": {"db_path": str(db_path)}},
                 }
             )
+            dashboard = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "resources/read",
+                    "params": {"uri": "wsa://relationship-dashboard", "arguments": {"db_path": str(db_path)}},
+                }
+            )
 
         self.assertEqual("wsa://status", status["result"]["contents"][0]["uri"])
         self.assertIn("# WeChat Social Assistant Status", status["result"]["contents"][0]["text"])
@@ -169,6 +181,8 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("只读", prompt["result"]["messages"][0]["content"]["text"])
         self.assertEqual("wsa://relationship-quality", quality["result"]["contents"][0]["uri"])
         self.assertIn("# 关系运营台", quality["result"]["contents"][0]["text"])
+        self.assertEqual("wsa://relationship-dashboard", dashboard["result"]["contents"][0]["uri"])
+        self.assertIn("# 关系驾驶舱", dashboard["result"]["contents"][0]["text"])
 
     def test_record_feedback_mcp_tool_requires_explicit_confirmation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

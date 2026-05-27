@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.8）
+## Agent 生态（v0.9）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.8 提供 MCP stdio server、关系质量层、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库，以及本地多入口关系来源导入。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.9 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库，以及本地多入口关系来源导入。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.8 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.9 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -106,6 +106,15 @@ python3 -m wsa.cli quality --contact 群成员A --min-score 0
 ```
 
 `quality` 会按联系人生成可解释的关系质量卡，包含总分、关系强度、最近互动、互惠、场景、风险、资料缺口和下一步动作。每个分数都会附带本地采集证据，包括来源会话、采集时间、摘要和截图路径（如果有），避免出现无法追溯的玄学评分。
+
+查看每日关系驾驶舱：
+
+```bash
+python3 -m wsa.cli dashboard
+python3 -m wsa.cli dashboard --min-score 0 --limit 12
+```
+
+`dashboard` 会把日常操作视图压成一个页面：优先联系、降温关系、新人机会、待处理承诺、高价值群聊、噪音群聊和最新来源线索。它复用关系质量、跟进建议、人脉候选人和多入口来源，不自动发送消息，只给出下一步动作和草稿。
 
 发现群聊/活动里值得认识的人：
 
