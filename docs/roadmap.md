@@ -2,17 +2,19 @@
 
 `wechat-social-assistant` is evolving into a local-first personal relationship operating system. The CLI remains the stable core; agent ecosystems use thin adapters around it.
 
-## v0.2 Agent Foundation
+## v0.2 Agent Foundation - shipped
 
 - Hermes Skill with privacy guardrails, command guidance, and UI metadata.
 - OpenClaw non-plugin usage guide.
 - Cross-ecosystem `agent/agent.json` manifest.
 - Portable doctor and guarded CLI wrapper scripts.
 
-## v0.3 MCP Interface
+## v0.3 MCP Interface - shipped
 
 - Read-only MCP tools: status, contact search, contact brief, next follow-up, daily report, and recent captures.
-- Write operations use a prepare/apply flow with explicit confirmation.
+- MCP resources: `wsa://status`, `wsa://contacts`, and `wsa://daily-report`.
+- MCP prompts: daily relationship review, contact follow-up, and safe capture review.
+- Write operations remain outside MCP in v0.3; they use confirmed CLI commands until prepare/apply write tools are introduced later.
 
 ## v0.4 Relationship Quality Layer
 

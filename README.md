@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.2）
+## Agent 生态（v0.3）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.3 额外提供只读 MCP stdio server，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 直接查询本地关系记忆。
 
 仓库提供：
 
@@ -14,6 +14,7 @@
 - `agent/hermes/wechat-social-assistant/SKILL.md`：Hermes Skill，可让 agent 按安全流程调用本地 `wsa`。
 - `agent/hermes/wechat-social-assistant/scripts/doctor.py`：本地自检脚本。
 - `agent/openclaw/wechat-social-assistant.md`：OpenClaw 非插件使用说明。
+- `wsa-mcp` / `python3 -m wsa.mcp_server`：只读 MCP server。
 - `docs/roadmap.md`：从 v0.2 到 v1.0 的产品路线图。
 
 Hermes 可用 raw URL 安装：
@@ -27,6 +28,16 @@ hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social
 ```bash
 python3 agent/hermes/wechat-social-assistant/scripts/doctor.py
 ```
+
+启动 MCP stdio server：
+
+```bash
+wsa-mcp
+# 或从源码目录运行
+python3 -m wsa.mcp_server
+```
+
+v0.3 暴露的 MCP tools 全部只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`list_recent_captures`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`。写入、截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 

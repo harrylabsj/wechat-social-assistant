@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 AGENT_ID = "wechat-social-assistant"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,7 @@ def _run_checks(root: Path, *, db_path: Path | None, obsidian_vault: Path | None
     checks = [
         _python_version_check(),
         _cli_importable_check(root),
+        _mcp_importable_check(root),
         _console_script_check(),
         _macos_capture_check(),
         _ocr_source_check(root),
@@ -80,6 +81,16 @@ def _cli_importable_check(root: Path) -> Check:
     except Exception as exc:
         return Check("cli_importable", "error", f"Cannot import wsa.cli: {exc}")
     return Check("cli_importable", "ok", "wsa.cli is importable from the selected project root.")
+
+
+def _mcp_importable_check(root: Path) -> Check:
+    sys.path.insert(0, str(root))
+    try:
+        from wsa import mcp_server
+    except Exception as exc:
+        return Check("mcp_importable", "error", f"Cannot import wsa.mcp_server: {exc}")
+    tool_count = len(getattr(mcp_server, "MCP_TOOLS", ()))
+    return Check("mcp_importable", "ok", f"wsa.mcp_server is importable with {tool_count} tools.")
 
 
 def _console_script_check() -> Check:

@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -16,12 +16,38 @@
     "doctor": "agent/hermes/wechat-social-assistant/scripts/doctor.py",
     "runner": "agent/hermes/wechat-social-assistant/scripts/wsa_run.py"
   },
+  "mcp": {
+    "command": "python3 -m wsa.mcp_server",
+    "console_script": "wsa-mcp",
+    "transport": "stdio",
+    "read_only": true,
+    "tools": [
+      "get_status",
+      "search_contacts",
+      "get_contact_brief",
+      "get_next_followup",
+      "get_daily_report",
+      "list_recent_captures"
+    ],
+    "resources": [
+      "wsa://status",
+      "wsa://contacts",
+      "wsa://daily-report"
+    ],
+    "prompts": [
+      "daily-relationship-review",
+      "contact-followup",
+      "safe-capture-review"
+    ],
+    "write_policy": "No mutating MCP tools are exposed in v0.3; use confirmed CLI commands for writes."
+  },
   "capabilities": [
     "local_status",
     "contact_search",
     "contact_brief",
     "followup_suggestions",
     "daily_analysis",
+    "mcp_read_only_interface",
     "obsidian_export",
     "ocr_import",
     "explicit_watch_mode"

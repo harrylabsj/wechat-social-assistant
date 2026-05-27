@@ -11,6 +11,13 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa suggest --contact NAME` - render a follow-up suggestion table.
 - `wsa profiles --contact NAME` - render contact-centered relationship profiles.
 
+## MCP Read-Only Server
+
+- `wsa-mcp` - run the MCP stdio server when the package console script is installed.
+- `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
+
+The v0.3 MCP server exposes only read tools: `get_status`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, and `list_recent_captures`. It also exposes `wsa://status`, `wsa://contacts`, `wsa://daily-report`, plus prompts for daily review, contact follow-up, and safe capture review.
+
 ## Confirm Before Running
 
 - `wsa ingest --contact NAME --text TEXT` - adds manual text to the local database.

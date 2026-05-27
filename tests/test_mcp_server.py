@@ -1,0 +1,194 @@
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from wsa import mcp_server
+from wsa.store import ingest_capture, init_db
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class MCPServerContractTests(unittest.TestCase):
+    def test_declares_read_only_tools_resources_and_prompts(self):
+        tool_names = [tool["name"] for tool in mcp_server.MCP_TOOLS]
+
+        self.assertEqual(
+            [
+                "get_status",
+                "search_contacts",
+                "get_contact_brief",
+                "get_next_followup",
+                "get_daily_report",
+                "list_recent_captures",
+            ],
+            tool_names,
+        )
+        self.assertFalse(
+            {
+                "watch",
+                "capture",
+                "import_image",
+                "reset",
+                "analyze",
+                "export_obsidian",
+                "mark_done",
+            }.intersection(tool_names)
+        )
+        for tool in mcp_server.MCP_TOOLS:
+            self.assertEqual("object", tool["inputSchema"]["type"])
+            self.assertIn("description", tool)
+
+        self.assertGreaterEqual(
+            {resource["uri"] for resource in mcp_server.MCP_RESOURCES},
+            {"wsa://status", "wsa://contacts", "wsa://daily-report"},
+        )
+        self.assertGreaterEqual(
+            {prompt["name"] for prompt in mcp_server.MCP_PROMPTS},
+            {"daily-relationship-review", "contact-followup", "safe-capture-review"},
+        )
+
+    def test_jsonrpc_initializes_and_lists_capabilities(self):
+        initialized = mcp_server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        )
+        tools = mcp_server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+        )
+        prompts = mcp_server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 3, "method": "prompts/list", "params": {}}
+        )
+        resources = mcp_server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 4, "method": "resources/list", "params": {}}
+        )
+        missing = mcp_server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 5, "method": "missing/method", "params": {}}
+        )
+
+        result = initialized["result"]
+        self.assertEqual("2.0", initialized["jsonrpc"])
+        self.assertEqual(mcp_server.MCP_PROTOCOL_VERSION, result["protocolVersion"])
+        self.assertEqual("wechat-social-assistant", result["serverInfo"]["name"])
+        self.assertIn("tools", result["capabilities"])
+        self.assertIn("resources", result["capabilities"])
+        self.assertIn("prompts", result["capabilities"])
+        self.assertEqual(mcp_server.MCP_TOOLS, tools["result"]["tools"])
+        self.assertEqual(mcp_server.MCP_PROMPTS, prompts["result"]["prompts"])
+        self.assertEqual(mcp_server.MCP_RESOURCES, resources["result"]["resources"])
+        self.assertEqual(-32601, missing["error"]["code"])
+
+    def test_read_only_tool_calls_return_structured_relationship_data(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            captures_dir = root / "data" / "captures"
+            captures_dir.mkdir(parents=True)
+            (captures_dir / "wechat-1.png").write_bytes(b"png")
+            _seed_relationship_data(db_path)
+
+            status = _call_tool("get_status", db_path=db_path, captures_dir=captures_dir)
+            search = _call_tool("search_contacts", db_path=db_path, query="张三")
+            brief = _call_tool("get_contact_brief", db_path=db_path, contact_name="张三")
+            followup = _call_tool("get_next_followup", db_path=db_path, contact_name="张三", min_score=0)
+            daily = _call_tool("get_daily_report", db_path=db_path, date="2026-05-27", min_score=0)
+            recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
+
+        self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
+        self.assertEqual(1, status["structuredContent"]["screenshot_count"])
+        self.assertEqual("张三", search["structuredContent"]["contacts"][0]["name"])
+        self.assertIn("增长交流群（3）", search["structuredContent"]["contacts"][0]["source_chats"])
+        self.assertIn("# 联系人简报：张三", brief["content"][0]["text"])
+        self.assertEqual("张三", brief["structuredContent"]["profile"]["name"])
+        self.assertEqual("张三", followup["structuredContent"]["suggestion"]["person_name"])
+        self.assertIn("draft", followup["structuredContent"]["suggestion"])
+        self.assertIn("# 社交圈分析报告 2026-05-27", daily["content"][0]["text"])
+        self.assertIn("followups", daily["structuredContent"])
+        self.assertEqual(2, len(recent["structuredContent"]["captures"]))
+        self.assertEqual("增长交流群（3）", recent["structuredContent"]["captures"][0]["contact_name"])
+
+    def test_resources_and_prompts_are_readable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            status = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "resources/read",
+                    "params": {"uri": "wsa://status", "arguments": {"db_path": str(db_path)}},
+                }
+            )
+            prompt = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "prompts/get",
+                    "params": {
+                        "name": "contact-followup",
+                        "arguments": {"contact_name": "张三"},
+                    },
+                }
+            )
+
+        self.assertEqual("wsa://status", status["result"]["contents"][0]["uri"])
+        self.assertIn("# WeChat Social Assistant Status", status["result"]["contents"][0]["text"])
+        self.assertIn("张三", prompt["result"]["messages"][0]["content"]["text"])
+        self.assertIn("只读", prompt["result"]["messages"][0]["content"]["text"])
+
+    def test_module_cli_help_is_available(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "wsa.mcp_server", "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("stdio", result.stdout)
+        self.assertIn("MCP", result.stdout)
+
+
+def _call_tool(name: str, *, db_path: Path, **arguments):
+    payload = mcp_server.handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": {"db_path": str(db_path), **arguments}},
+        }
+    )
+    if "error" in payload:
+        raise AssertionError(payload["error"])
+    return payload["result"]
+
+
+def _seed_relationship_data(db_path: Path) -> None:
+    init_db(db_path)
+    ingest_capture(
+        db_path,
+        raw_text=(
+            "增长交流群（3）\n"
+            "张三\n"
+            "我是星火科技的张三，最近在做AI社交助手，需要看看是否有合作机会？\n"
+            "李四\n"
+            "谢谢分享，可以下周聊一下。"
+        ),
+        contact_hint="增长交流群（3）",
+        source="test",
+        captured_at="2026-05-27T09:00:00+08:00",
+    )
+    ingest_capture(
+        db_path,
+        raw_text="王五\n王五老师，谢谢你上次推荐的文章，我整理了一版方案，需要你看看。",
+        contact_hint="王五",
+        source="test",
+        captured_at="2026-05-26T18:30:00+08:00",
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()
