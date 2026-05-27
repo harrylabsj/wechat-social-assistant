@@ -31,11 +31,13 @@
 - Suggestions suppress done/snoozed/not relevant/do-not-contact items and tune draft tone/score from `too_pushy` and `good_draft`.
 - MCP `record_feedback` is the only v0.5 write tool and requires explicit confirmation.
 
-## v0.6 Group and Event Discovery
+## v0.6 Group and Event Discovery - shipped
 
 - Detect candidate relationships from group chats and event-like contexts.
 - Model candidates as `candidate -> pending confirmation -> contact`.
 - Preserve source group, evidence, confidence, and icebreaker draft.
+- CLI `candidates` renders local candidate people; `candidates --sync` persists the pending queue; `candidate-confirm --yes` promotes a candidate after review.
+- MCP `list_relationship_candidates` is read-only; `confirm_relationship_candidate` requires explicit confirmation.
 
 ## v0.7 Obsidian and Knowledge Base Depth
 

@@ -19,6 +19,12 @@ from .cli import (
     _render_contacts_markdown,
     _render_obsidian_daily_report,
 )
+from .candidates import (
+    candidate_to_dict,
+    confirm_relationship_candidate,
+    discover_relationship_candidates,
+    render_candidates_markdown,
+)
 from .feedback import (
     FEEDBACK_ACTIONS,
     feedback_to_dict,
@@ -38,7 +44,7 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 
 MCP_TOOLS = [
     {
@@ -124,6 +130,47 @@ MCP_TOOLS = [
         },
     },
     {
+        "name": "list_relationship_candidates",
+        "description": "Read candidate relationships discovered from group chats and event-like contexts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "confirmed", "dismissed"],
+                    "description": "Optional lifecycle status filter.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                "min_confidence": {"type": "integer", "minimum": 0, "default": 45},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "confirm_relationship_candidate",
+        "description": "Confirm a relationship candidate as a local contact after explicit user confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["confirmed", "confirmation_text"],
+            "properties": {
+                "id": {"type": "integer", "description": "Candidate id."},
+                "name": {"type": "string", "description": "Candidate name."},
+                "source_chat": {"type": "string", "description": "Source group/event chat."},
+                "note": {"type": "string", "description": "Optional user note."},
+                "confirmed_at": {"type": "string", "description": "Optional audit timestamp override."},
+                "confirmed": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": "Must exactly equal: confirm relationship candidate",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
+    {
         "name": "list_feedback",
         "description": "Read local feedback records for follow-up suggestions.",
         "inputSchema": {
@@ -198,6 +245,12 @@ MCP_RESOURCES = [
         "description": "Evidence-backed relationship quality scores, risks, information gaps, and next actions.",
         "mimeType": "text/markdown",
     },
+    {
+        "uri": "wsa://relationship-candidates",
+        "name": "WSA relationship candidates",
+        "description": "Candidate relationships discovered from group chats and event-like contexts.",
+        "mimeType": "text/markdown",
+    },
 ]
 
 MCP_PROMPTS = [
@@ -219,6 +272,13 @@ MCP_PROMPTS = [
         "name": "safe-capture-review",
         "description": "Guide an agent through privacy-preserving capture review and import planning.",
         "arguments": [],
+    },
+    {
+        "name": "relationship-candidate-review",
+        "description": "Guide an agent to review group/event relationship candidates without contacting anyone automatically.",
+        "arguments": [
+            {"name": "min_confidence", "description": "Optional minimum confidence threshold.", "required": False}
+        ],
     },
 ]
 
@@ -274,7 +334,7 @@ def serve_stdio(infile=sys.stdin, outfile=sys.stdout) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run WeChat Social Assistant as a read-only MCP server.")
+    parser = argparse.ArgumentParser(description="Run WeChat Social Assistant as a local-first MCP server.")
     parser.add_argument(
         "--transport",
         choices=["stdio"],
@@ -316,6 +376,8 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_next_followup": _tool_get_next_followup,
         "get_daily_report": _tool_get_daily_report,
         "get_relationship_quality": _tool_get_relationship_quality,
+        "list_relationship_candidates": _tool_list_relationship_candidates,
+        "confirm_relationship_candidate": _tool_confirm_relationship_candidate,
         "list_feedback": _tool_list_feedback,
         "record_feedback": _tool_record_feedback,
         "list_recent_captures": _tool_list_recent_captures,
@@ -348,6 +410,8 @@ def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
         tool_result = _tool_get_daily_report(merged_arguments)
     elif normalized_uri == "wsa://relationship-quality":
         tool_result = _tool_get_relationship_quality(merged_arguments)
+    elif normalized_uri == "wsa://relationship-candidates":
+        tool_result = _tool_list_relationship_candidates(merged_arguments)
     else:
         raise ValueError(f"unknown resource uri: {uri}")
     return {
@@ -386,6 +450,13 @@ def _handle_prompt_get(params: dict[str, Any]) -> dict[str, Any]:
         text = (
             "请只读取 wechat-social-assistant 的状态和最近采集记录，检查是否存在隐私风险、误采集、"
             "低质量 OCR 或需要用户确认的导入事项。不要启动截图、不要读取微信私有数据库、不要写入文件。"
+        )
+    elif name == "relationship-candidate-review":
+        min_confidence = str(arguments.get("min_confidence") or 45)
+        text = (
+            f"请以只读方式调用 list_relationship_candidates，min_confidence={min_confidence}。"
+            "按来源群/活动、证据、置信度和破冰风险整理值得认识的人；不要主动发送微信，"
+            "需要转为正式联系人时必须先向用户确认，再调用 confirm_relationship_candidate。"
         )
     else:
         raise ValueError(f"unknown prompt: {name}")
@@ -538,6 +609,55 @@ def _tool_get_relationship_quality(arguments: dict[str, Any]) -> dict[str, Any]:
             "cards": [quality_card_to_dict(card) for card in cards],
         },
     )
+
+
+def _tool_list_relationship_candidates(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    candidates = discover_relationship_candidates(
+        db_path,
+        min_confidence=_min_score(arguments.get("min_confidence"), default=45),
+        limit=_limit(arguments.get("limit"), default=50),
+    )
+    status = _optional_str(arguments.get("status"))
+    if status:
+        candidates = [candidate for candidate in candidates if candidate.status == status]
+    return _tool_result(
+        render_candidates_markdown(candidates),
+        {
+            "status": status,
+            "count": len(candidates),
+            "candidates": [candidate_to_dict(candidate) for candidate in candidates],
+        },
+    )
+
+
+def _tool_confirm_relationship_candidate(arguments: dict[str, Any]) -> dict[str, Any]:
+    if (
+        arguments.get("confirmed") is not True
+        or arguments.get("confirmation_text") != "confirm relationship candidate"
+    ):
+        raise ValueError(
+            "confirm_relationship_candidate requires confirmed=true "
+            "and confirmation_text='confirm relationship candidate'"
+        )
+    candidate = confirm_relationship_candidate(
+        _db_path(arguments),
+        candidate_id=_optional_int(arguments.get("id") or arguments.get("candidate_id")),
+        name=_optional_str(arguments.get("name")),
+        source_chat=_optional_str(arguments.get("source_chat")),
+        note=str(arguments.get("note") or ""),
+        confirmed_at=_optional_str(arguments.get("confirmed_at")),
+    )
+    text = (
+        "# 已确认人脉候选人\n\n"
+        f"- 姓名：{candidate.name}\n"
+        f"- 来源：{candidate.source_chat}\n"
+        f"- 状态：{candidate.status}\n"
+        f"- 时间：{candidate.confirmed_at or candidate.updated_at}\n"
+    )
+    if candidate.note:
+        text += f"- 备注：{candidate.note}\n"
+    return _tool_result(text, {"candidate": candidate_to_dict(candidate)})
 
 
 def _tool_list_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -733,6 +853,12 @@ def _limit(value: Any, *, default: int) -> int:
     if value is None or value == "":
         return default
     return max(1, min(100, int(value)))
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def _min_score(value: Any, *, default: int) -> int:

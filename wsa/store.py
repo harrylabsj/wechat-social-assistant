@@ -55,6 +55,24 @@ create table if not exists contact_feedback (
     created_at text not null
 );
 
+create table if not exists relationship_candidates (
+    id integer primary key autoincrement,
+    name text not null,
+    source_chat text not null,
+    status text not null default 'pending',
+    confidence integer not null,
+    reasons_json text not null default '[]',
+    evidence_captured_at text,
+    evidence_excerpt text not null default '',
+    icebreaker_draft text not null default '',
+    created_at text not null,
+    updated_at text not null,
+    confirmed_at text,
+    dismissed_at text,
+    note text not null default '',
+    unique(name, source_chat)
+);
+
 create index if not exists idx_people_last_interaction
 on people(last_interaction_at);
 
@@ -63,6 +81,9 @@ on captures(person_id, captured_at);
 
 create index if not exists idx_contact_feedback_person_time
 on contact_feedback(person_name, created_at);
+
+create index if not exists idx_relationship_candidates_status_confidence
+on relationship_candidates(status, confidence);
 """
 
 
@@ -85,6 +106,7 @@ class ResetResult:
     removed_captures: int
     removed_signals: int
     removed_feedback: int
+    removed_candidates: int
     removed_screenshots: int
     dry_run: bool = False
 
@@ -235,11 +257,13 @@ def reset_memory(
         removed_captures = int(conn.execute("select count(*) from captures").fetchone()[0])
         removed_signals = int(conn.execute("select count(*) from capture_signals").fetchone()[0])
         removed_feedback = int(conn.execute("select count(*) from contact_feedback").fetchone()[0])
+        removed_candidates = int(conn.execute("select count(*) from relationship_candidates").fetchone()[0])
         if not dry_run:
             conn.execute("delete from capture_signals")
             conn.execute("delete from captures")
             conn.execute("delete from people")
             conn.execute("delete from contact_feedback")
+            conn.execute("delete from relationship_candidates")
             conn.commit()
 
     screenshot_files = _screenshot_files(screenshots)
@@ -254,6 +278,7 @@ def reset_memory(
         removed_captures=removed_captures,
         removed_signals=removed_signals,
         removed_feedback=removed_feedback,
+        removed_candidates=removed_candidates,
         removed_screenshots=len(screenshot_files),
         dry_run=dry_run,
     )

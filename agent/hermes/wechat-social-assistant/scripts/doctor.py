@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 AGENT_ID = "wechat-social-assistant"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 
 @dataclass(frozen=True)

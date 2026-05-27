@@ -8,6 +8,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa contacts --query NAME` - find known contacts, groups, speakers, organizations, and identity hints.
 - `wsa brief NAME` - summarize one contact or matching set of contacts.
 - `wsa quality --contact NAME` - render evidence-backed relationship quality, risks, gaps, and next actions.
+- `wsa candidates --min-confidence 45` - discover group/event relationship candidates without writing by default.
 - `wsa feedback-list --contact NAME` - review auditable local feedback.
 - `wsa next --contact NAME` - show the highest-priority follow-up draft for a contact.
 - `wsa suggest --contact NAME` - render a follow-up suggestion table.
@@ -18,11 +19,13 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v0.5 MCP server exposes read tools: `get_status`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_relationship_quality`, `list_feedback`, and `list_recent_captures`. The only write tool is `record_feedback`, and it requires explicit confirmation arguments. It also exposes `wsa://status`, `wsa://contacts`, `wsa://daily-report`, `wsa://relationship-quality`, plus prompts for daily review, contact follow-up, and safe capture review.
+The v0.6 MCP server exposes read tools: `get_status`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_relationship_quality`, `list_relationship_candidates`, `list_feedback`, and `list_recent_captures`. Write tools are `record_feedback` and `confirm_relationship_candidate`, and both require explicit confirmation arguments. It also exposes `wsa://status`, `wsa://contacts`, `wsa://daily-report`, `wsa://relationship-quality`, `wsa://relationship-candidates`, plus prompts for daily review, contact follow-up, relationship candidate review, and safe capture review.
 
 ## Confirm Before Running
 
 - `wsa ingest --contact NAME --text TEXT` - adds manual text to the local database.
+- `wsa candidates --sync` - persists discovered candidates to the local pending queue.
+- `wsa candidate-confirm NAME --source-chat GROUP --yes` - promotes a reviewed candidate to confirmed.
 - `wsa feedback NAME ACTION` - records user feedback such as `mark_done`, `snooze`, `too_pushy`, or `good_draft`.
 - `wsa import-image PATH --contact NAME` - OCRs screenshots and stores evidence.
 - `wsa capture --contact NAME` - captures the screen or a selected window.

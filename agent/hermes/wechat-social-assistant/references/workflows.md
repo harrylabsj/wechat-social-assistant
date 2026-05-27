@@ -23,6 +23,14 @@
 3. Use `wsa feedback-list --contact NAME` to verify the record.
 4. Re-run `wsa next --contact NAME` or `wsa suggest --contact NAME` to see the adjusted recommendation.
 
+## Group/Event Candidate Discovery
+
+1. Run `wsa candidates --min-confidence 45` to review possible new people from groups and event-like contexts.
+2. Explain that drafts are only suggestions and must not be sent automatically.
+3. If the user wants to keep the queue, run `wsa candidates --sync` after confirmation.
+4. If the user wants to promote one person, run `wsa candidate-confirm NAME --source-chat GROUP --yes` after confirmation.
+5. Re-run `wsa brief NAME` or `wsa quality --contact NAME --min-score 0` to inspect the confirmed person.
+
 ## Screenshot Import
 
 1. Confirm the user wants to import local screenshots.

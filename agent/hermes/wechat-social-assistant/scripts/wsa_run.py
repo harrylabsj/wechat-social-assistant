@@ -13,6 +13,7 @@ READ_COMMANDS = {
     "feedback-list",
     "brief",
     "quality",
+    "candidates",
     "next",
     "suggest",
     "profiles",
@@ -27,6 +28,7 @@ WRITE_COMMANDS = {
     "analyze",
     "export-obsidian",
     "feedback",
+    "candidate-confirm",
     "watch",
     "stop-watch",
     "stop",
@@ -52,11 +54,17 @@ def main(argv: list[str] | None = None) -> int:
     command = parsed.args[0]
     if command not in ALL_COMMANDS:
         parser.error(f"unsupported wsa command: {command}")
-    if command in WRITE_COMMANDS and not parsed.confirm:
+    if _requires_confirmation(command, parsed.args) and not parsed.confirm:
         parser.error(f"{command} requires --confirm because it can write local state or control a process")
 
     project_root = parsed.project_root or Path(__file__).resolve().parents[4]
     return subprocess.call([sys.executable, "-m", "wsa.cli", *parsed.args], cwd=project_root)
+
+
+def _requires_confirmation(command: str, args: list[str]) -> bool:
+    if command in WRITE_COMMANDS:
+        return True
+    return command == "candidates" and "--sync" in args[1:]
 
 
 if __name__ == "__main__":

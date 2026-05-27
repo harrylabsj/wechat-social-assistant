@@ -8,6 +8,12 @@ import re
 import sys
 import time
 
+from .candidates import (
+    confirm_relationship_candidate,
+    discover_relationship_candidates,
+    render_candidates_markdown,
+    sync_relationship_candidates,
+)
 from .feedback import FEEDBACK_ACTIONS, list_feedback, record_feedback, render_feedback_markdown
 from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
@@ -172,6 +178,26 @@ def build_parser() -> argparse.ArgumentParser:
     quality.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     quality.add_argument("--out", type=Path)
     quality.set_defaults(func=cmd_quality)
+
+    candidates = sub.add_parser("candidates", help="Discover relationship candidates from group/event contexts.")
+    candidates.add_argument("--min-confidence", type=int, default=45, help="Only include candidates with confidence >= N.")
+    candidates.add_argument("--limit", type=int, default=50)
+    candidates.add_argument("--status", choices=["pending", "confirmed", "dismissed"], help="Only show one lifecycle status.")
+    candidates.add_argument("--sync", action="store_true", help="Persist discovered candidates into the local database.")
+    candidates.add_argument("--out", type=Path)
+    candidates.set_defaults(func=cmd_candidates)
+
+    candidate_confirm = sub.add_parser(
+        "candidate-confirm",
+        help="Confirm a relationship candidate after user review.",
+    )
+    candidate_confirm.add_argument("name", nargs="?", help="Candidate name. Optional when --id is provided.")
+    candidate_confirm.add_argument("--source-chat", help="Source group/event chat for the candidate.")
+    candidate_confirm.add_argument("--id", type=int, dest="candidate_id", help="Candidate id.")
+    candidate_confirm.add_argument("--note", default="")
+    candidate_confirm.add_argument("--confirmed-at", help="Override confirmation timestamp for imports/tests.")
+    candidate_confirm.add_argument("--yes", action="store_true", help="Required to write the confirmation locally.")
+    candidate_confirm.set_defaults(func=cmd_candidate_confirm)
 
     feedback = sub.add_parser("feedback", help="Record local feedback for a contact suggestion.")
     feedback.add_argument("contact", help="Contact name.")
@@ -568,6 +594,52 @@ def cmd_quality(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_candidates(args: argparse.Namespace) -> int:
+    init_db(args.db)
+    if args.sync:
+        candidates = sync_relationship_candidates(
+            args.db,
+            min_confidence=args.min_confidence,
+            limit=args.limit,
+        )
+    else:
+        candidates = discover_relationship_candidates(
+            args.db,
+            min_confidence=args.min_confidence,
+            limit=args.limit,
+        )
+    if args.status:
+        candidates = [candidate for candidate in candidates if candidate.status == args.status]
+    markdown = render_candidates_markdown(candidates)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_candidate_confirm(args: argparse.Namespace) -> int:
+    if not args.yes:
+        raise SystemExit("Use --yes to confirm a relationship candidate locally.")
+    if args.candidate_id is None and (not args.name or not args.source_chat):
+        raise SystemExit("Provide --id or both NAME and --source-chat.")
+    result = confirm_relationship_candidate(
+        args.db,
+        candidate_id=args.candidate_id,
+        name=args.name,
+        source_chat=args.source_chat,
+        confirmed_at=args.confirmed_at,
+        note=args.note,
+    )
+    print(
+        f"confirmed candidate id={result.id} name={result.name} "
+        f"source_chat={result.source_chat} status={result.status}"
+    )
+    return 0
+
+
 def cmd_feedback(args: argparse.Namespace) -> int:
     result = record_feedback(
         args.db,
@@ -623,6 +695,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         f"captures={result.removed_captures} "
         f"signals={result.removed_signals} "
         f"feedback={result.removed_feedback} "
+        f"candidates={result.removed_candidates} "
         f"screenshots={result.removed_screenshots}"
     )
     return 0

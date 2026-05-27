@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.5）
+## Agent 生态（v0.6）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.5 提供 MCP stdio server、关系质量层和本地反馈闭环，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 查询本地关系记忆，并在用户确认后记录反馈。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.6 提供 MCP stdio server、关系质量层、本地反馈闭环，以及从群聊/活动场景发现“值得认识的人”的候选人队列。
 
 仓库提供：
 
@@ -14,7 +14,7 @@
 - `agent/hermes/wechat-social-assistant/SKILL.md`：Hermes Skill，可让 agent 按安全流程调用本地 `wsa`。
 - `agent/hermes/wechat-social-assistant/scripts/doctor.py`：本地自检脚本。
 - `agent/openclaw/wechat-social-assistant.md`：OpenClaw 非插件使用说明。
-- `wsa-mcp` / `python3 -m wsa.mcp_server`：只读 MCP server。
+- `wsa-mcp` / `python3 -m wsa.mcp_server`：本地优先 MCP server。
 - `docs/roadmap.md`：从 v0.2 到 v1.0 的产品路线图。
 
 Hermes 可用 raw URL 安装：
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.5 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_feedback`、`list_recent_captures`。唯一写入工具是 `record_feedback`，必须带 `confirmed=true` 和 `confirmation_text="record local feedback"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`。截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.6 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`、`wsa://relationship-candidates`。截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -106,6 +106,16 @@ python3 -m wsa.cli quality --contact 群成员A --min-score 0
 ```
 
 `quality` 会按联系人生成可解释的关系质量卡，包含总分、关系强度、最近互动、互惠、场景、风险、资料缺口和下一步动作。每个分数都会附带本地采集证据，包括来源会话、采集时间、摘要和截图路径（如果有），避免出现无法追溯的玄学评分。
+
+发现群聊/活动里值得认识的人：
+
+```bash
+python3 -m wsa.cli candidates --min-confidence 45
+python3 -m wsa.cli candidates --sync --min-confidence 45
+python3 -m wsa.cli candidate-confirm 张三 --source-chat "AI路演群（12）" --yes
+```
+
+`candidates` 会从群聊发言人和活动类群名中提取候选人，保留来源群、证据摘录、置信度、理由和一版克制的破冰草稿。默认只读；加 `--sync` 才会把候选人写入本地 `relationship_candidates` 表。`candidate-confirm` 必须带 `--yes`，确认后才会把候选人标为 `confirmed` 并进入本地联系人记忆。
 
 记录用户反馈，让系统逐渐学习你的社交风格：
 

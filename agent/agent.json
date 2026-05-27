@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -29,6 +29,8 @@
       "get_next_followup",
       "get_daily_report",
       "get_relationship_quality",
+      "list_relationship_candidates",
+      "confirm_relationship_candidate",
       "list_feedback",
       "record_feedback",
       "list_recent_captures"
@@ -37,20 +39,23 @@
       "wsa://status",
       "wsa://contacts",
       "wsa://daily-report",
-      "wsa://relationship-quality"
+      "wsa://relationship-quality",
+      "wsa://relationship-candidates"
     ],
     "prompts": [
       "daily-relationship-review",
       "contact-followup",
+      "relationship-candidate-review",
       "safe-capture-review"
     ],
-    "write_policy": "record_feedback is the only mutating MCP tool in v0.5 and requires confirmed=true plus confirmation_text='record local feedback'."
+    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'."
   },
   "capabilities": [
     "local_status",
     "contact_search",
     "contact_brief",
     "relationship_quality",
+    "relationship_candidate_discovery",
     "feedback_loop",
     "followup_suggestions",
     "daily_analysis",
@@ -79,6 +84,17 @@
       "name": "quality",
       "mode": "read",
       "example": "python3 -m wsa.cli quality --contact NAME"
+    },
+    {
+      "name": "candidates",
+      "mode": "read",
+      "example": "python3 -m wsa.cli candidates --min-confidence 45"
+    },
+    {
+      "name": "candidate-confirm",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli candidate-confirm NAME --source-chat GROUP --yes"
     },
     {
       "name": "feedback-list",

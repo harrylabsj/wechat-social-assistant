@@ -1,6 +1,6 @@
 # wechat-social-assistant for OpenClaw Without Plugins
 
-OpenClaw can use `wechat-social-assistant` without a native plugin by treating `wsa` as a local CLI-backed agent capability. If the runtime supports MCP, it can also attach the read-only stdio server.
+OpenClaw can use `wechat-social-assistant` without a native plugin by treating `wsa` as a local CLI-backed agent capability. If the runtime supports MCP, it can also attach the stdio server.
 
 ## Install
 
@@ -19,9 +19,9 @@ python3 -m pip install "git+https://github.com/harrylabsj/wechat-social-assistan
 ## Operating Model
 
 - Use `wsa status` before making recommendations.
-- Use read-only commands for exploration: `contacts`, `brief`, `quality`, `feedback-list`, `next`, `suggest`, and `profiles`.
-- For MCP-native operation, configure command `wsa-mcp` or `python3 -m wsa.mcp_server`; v0.5 only allows feedback writes through explicit confirmation.
-- Ask before `feedback` or MCP `record_feedback`; feedback changes future suggestions by suppressing, snoozing, or tuning drafts.
+- Use read-only commands for exploration: `contacts`, `brief`, `quality`, `candidates`, `feedback-list`, `next`, `suggest`, and `profiles`.
+- For MCP-native operation, configure command `wsa-mcp` or `python3 -m wsa.mcp_server`; mutating tools require explicit confirmation.
+- Ask before `feedback`, `candidate-confirm`, `candidates --sync`, MCP `record_feedback`, or MCP `confirm_relationship_candidate`.
 - Ask for explicit user confirmation before commands that capture screenshots, import images, write reports, export to Obsidian, reset memory, start watch mode, or stop processes.
 - Keep all database, screenshot, and report files local unless the user explicitly asks to publish them.
 
@@ -38,6 +38,8 @@ wsa status
 wsa contacts --query NAME
 wsa brief NAME
 wsa quality --contact NAME
+wsa candidates --min-confidence 45
+wsa candidate-confirm NAME --source-chat GROUP --yes
 wsa feedback-list --contact NAME
 wsa feedback NAME too_pushy --note "draft was too direct"
 wsa next --contact NAME
