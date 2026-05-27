@@ -10,6 +10,10 @@ import sqlite3
 from .parser import Signal, extract_signals, parse_capture
 
 
+class EmptyCaptureError(ValueError):
+    pass
+
+
 SCHEMA = """
 create table if not exists people (
     id integer primary key autoincrement,
@@ -112,6 +116,8 @@ def init_db(db_path: Path | str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate_existing_schema(conn)
+        conn.commit()
 
 
 def ingest_capture(
@@ -126,6 +132,8 @@ def ingest_capture(
     init_db(db_path)
     captured_at = captured_at or now_iso()
     parsed = parse_capture(raw_text, contact_hint=contact_hint)
+    if not parsed.clean_text.strip():
+        raise EmptyCaptureError("empty capture text after OCR cleanup")
     text_hash = _hash_text(parsed.clean_text)
     current_time = now_iso()
 
@@ -320,6 +328,16 @@ def _should_attach_duplicate_image(existing_image_path: str | None) -> bool:
     if not existing_image_path:
         return True
     return not Path(existing_image_path).exists()
+
+
+def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, "captures", "image_path", "text")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"pragma table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"alter table {table} add column {column} {definition}")
 
 
 def _ensure_group_speakers(

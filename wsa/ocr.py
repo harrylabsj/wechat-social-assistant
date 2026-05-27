@@ -100,7 +100,7 @@ def ensure_frontmost_helper() -> Path:
 
 
 def next_capture_path(root: Path | str) -> Path:
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     return Path(root) / "captures" / f"wechat-{timestamp}.png"
 
 
@@ -221,7 +221,10 @@ def _frontmost_app_from_swift() -> FrontmostAppStatus:
 
 def _frontmost_app_from_osascript() -> FrontmostAppStatus:
     script = 'tell application "System Events" to get name of first application process whose frontmost is true'
-    result = subprocess.run(["osascript", "-e", script], text=True, capture_output=True)
+    try:
+        result = subprocess.run(["osascript", "-e", script], text=True, capture_output=True)
+    except OSError as exc:
+        return FrontmostAppStatus(name=None, method="osascript", detail=f"osascript unavailable: {exc}")
     if result.returncode == 0:
         name = result.stdout.strip()
         if name:

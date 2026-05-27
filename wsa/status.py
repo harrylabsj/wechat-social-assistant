@@ -178,8 +178,18 @@ def _top_followup_summary(db: Path) -> str | None:
 
 
 def detect_watch_processes(process_rows: list[str], *, current_pid: int | None = None) -> tuple[int, ...]:
+    return _detect_watch_processes(process_rows, current_pid=current_pid, db_path=None)
+
+
+def _detect_watch_processes(
+    process_rows: list[str],
+    *,
+    current_pid: int | None = None,
+    db_path: Path | str | None = None,
+) -> tuple[int, ...]:
     pids: list[int] = []
     current = current_pid or os.getpid()
+    selected_db = _normalize_process_path(db_path) if db_path is not None else None
     for row in process_rows:
         parsed = _parse_process_row(row)
         if not parsed:
@@ -188,6 +198,8 @@ def detect_watch_processes(process_rows: list[str], *, current_pid: int | None =
         if pid == current:
             continue
         if _is_watch_command(command):
+            if selected_db is not None and _watch_command_db_path(command) != selected_db:
+                continue
             pids.append(pid)
     return tuple(pids)
 
@@ -196,13 +208,15 @@ def stop_watch_processes(
     *,
     process_rows: list[str] | None = None,
     current_pid: int | None = None,
+    db_path: Path | str | None = None,
     dry_run: bool = False,
     kill_fn=os.kill,
     sig: int = signal.SIGTERM,
 ) -> tuple[int, ...]:
-    pids = detect_watch_processes(
+    pids = _detect_watch_processes(
         _process_rows() if process_rows is None else process_rows,
         current_pid=current_pid or os.getpid(),
+        db_path=db_path,
     )
     if dry_run:
         return pids
@@ -214,7 +228,7 @@ def stop_watch_processes(
 def _count_screenshots(path: Path) -> int:
     if not path.exists():
         return 0
-    suffixes = {".png", ".jpg", ".jpeg", ".heic", ".tiff"}
+    suffixes = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
     return sum(1 for item in path.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
 
 
@@ -243,16 +257,40 @@ def _parse_process_row(row: str) -> tuple[int, str] | None:
 def _is_watch_command(command: str) -> bool:
     if re.search(r"\b(rg|grep|pgrep)\b", command):
         return False
+    return _watch_command_args(command) is not None
+
+
+def _watch_command_args(command: str) -> list[str] | None:
     try:
         tokens = shlex.split(command)
     except ValueError:
         tokens = command.split()
     for index, token in enumerate(tokens):
         if token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "wsa.cli":
-            return "watch" in tokens[index + 2 :]
+            args = tokens[index + 2 :]
+            return args if "watch" in args else None
         if Path(token).name == "wsa":
-            return "watch" in tokens[index + 1 :]
-    return False
+            args = tokens[index + 1 :]
+            return args if "watch" in args else None
+    return None
+
+
+def _watch_command_db_path(command: str) -> Path | None:
+    args = _watch_command_args(command)
+    if not args:
+        return None
+    for index, token in enumerate(args):
+        if token == "--db" and index + 1 < len(args):
+            return _normalize_process_path(args[index + 1])
+        if token.startswith("--db="):
+            return _normalize_process_path(token.split("=", 1)[1])
+    return None
+
+
+def _normalize_process_path(path: Path | str | None) -> Path | None:
+    if path is None:
+        return None
+    return Path(path).expanduser().resolve(strict=False)
 
 
 def _count_log_lines(path: Path) -> int:

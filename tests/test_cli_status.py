@@ -72,6 +72,21 @@ class StatusCommandTests(unittest.TestCase):
         self.assertIn("screenshots: 1", rendered)
         self.assertIn("last log: 2026-05-26T22:21:52+08:00 app=Codex action=skip", rendered)
 
+    def test_status_counts_tif_screenshots(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            captures_dir = root / "data" / "captures"
+            captures_dir.mkdir(parents=True)
+            (captures_dir / "wechat-1.tif").write_bytes(b"tif")
+            (captures_dir / "wechat-2.tiff").write_bytes(b"tiff")
+            (captures_dir / "notes.txt").write_text("ignore", encoding="utf-8")
+            init_db(db_path)
+
+            report = build_status_report(db_path, captures_dir=captures_dir, process_rows=[])
+
+        self.assertEqual(2, report.screenshot_count)
+
     def test_detect_watch_processes_finds_wsa_watch_and_ignores_current_process(self):
         rows = [
             "100 /usr/bin/python3 -m wsa.cli watch --interval 10",
@@ -162,6 +177,23 @@ class StatusCommandTests(unittest.TestCase):
         stopped = stop_watch_processes(
             process_rows=rows,
             current_pid=999,
+            kill_fn=lambda pid, sig: killed.append((pid, sig)),
+        )
+
+        self.assertEqual((100,), stopped)
+        self.assertEqual([(100, 15)], killed)
+
+    def test_stop_watch_processes_filters_by_database_path(self):
+        killed: list[tuple[int, int]] = []
+        rows = [
+            "100 /usr/bin/python3 -m wsa.cli --db /tmp/a/social.db watch --interval 10",
+            "101 /usr/bin/python3 -m wsa.cli --db /tmp/b/social.db watch --interval 10",
+        ]
+
+        stopped = stop_watch_processes(
+            process_rows=rows,
+            current_pid=999,
+            db_path=Path("/tmp/a/social.db"),
             kill_fn=lambda pid, sig: killed.append((pid, sig)),
         )
 

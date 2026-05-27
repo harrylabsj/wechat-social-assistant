@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wsa.store import connect, ingest_capture, init_db, reset_memory
+from wsa.store import EmptyCaptureError, connect, ingest_capture, init_db, reset_memory
 
 
 class StoreTests(unittest.TestCase):
@@ -120,6 +120,73 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(result.inserted)
         self.assertEqual(("schedule",), result.signal_kinds)
         self.assertEqual(["schedule"], [row["kind"] for row in signals])
+
+    def test_init_db_migrates_existing_captures_without_image_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    create table people (
+                        id integer primary key autoincrement,
+                        name text not null unique,
+                        aliases_json text not null default '[]',
+                        notes text not null default '',
+                        created_at text not null,
+                        updated_at text not null,
+                        last_interaction_at text
+                    );
+                    create table captures (
+                        id integer primary key autoincrement,
+                        person_id integer not null references people(id) on delete cascade,
+                        captured_at text not null,
+                        source text not null,
+                        raw_text text not null,
+                        clean_text text not null,
+                        text_hash text not null,
+                        created_at text not null,
+                        unique(person_id, text_hash)
+                    );
+                    """
+                )
+
+            init_db(db_path)
+            result = ingest_capture(
+                db_path,
+                raw_text="王五\n下周方便聊聊吗？",
+                contact_hint="王五",
+                source="test",
+                captured_at="2026-05-26T09:00:00+08:00",
+                image_path="/tmp/wechat.png",
+            )
+
+            with connect(db_path) as conn:
+                columns = [row["name"] for row in conn.execute("pragma table_info(captures)").fetchall()]
+                capture = conn.execute("select image_path from captures").fetchone()
+
+        self.assertTrue(result.inserted)
+        self.assertIn("image_path", columns)
+        self.assertEqual("/tmp/wechat.png", capture["image_path"])
+
+    def test_ingest_capture_rejects_empty_clean_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            init_db(db_path)
+
+            with self.assertRaisesRegex(EmptyCaptureError, "empty"):
+                ingest_capture(
+                    db_path,
+                    raw_text=" \n\t\n",
+                    source="ocr",
+                    captured_at="2026-05-26T09:00:00+08:00",
+                )
+
+            with connect(db_path) as conn:
+                people_count = conn.execute("select count(*) from people").fetchone()[0]
+                capture_count = conn.execute("select count(*) from captures").fetchone()[0]
+
+        self.assertEqual(0, people_count)
+        self.assertEqual(0, capture_count)
 
     def test_ingest_capture_upserts_group_speakers_as_people(self):
         with tempfile.TemporaryDirectory() as tmpdir:

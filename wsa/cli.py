@@ -12,6 +12,7 @@ from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_ca
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
 from .store import (
+    EmptyCaptureError,
     connect,
     default_db_path,
     ingest_capture,
@@ -29,13 +30,20 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
 DEFAULT_OBSIDIAN_VAULT = Path.home() / "Documents" / "Obsidian Vault"
 
 
+def _default_reports_dir(db_path: Path) -> Path:
+    db_parent = db_path.parent
+    if db_parent.name == "data":
+        return db_parent.parent / "reports"
+    return db_parent / "reports"
+
+
 class WSAArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args: list[str] | None = None, namespace: argparse.Namespace | None = None):
         parsed = super().parse_args(args, namespace)
         if getattr(parsed, "command", None) in {"analyze", "status", "watch"} and parsed.log_file is None:
             parsed.log_file = Path(parsed.db).parent / "watch.log"
         if getattr(parsed, "command", None) == "analyze":
-            reports_dir = Path(parsed.db).parent.parent / "reports"
+            reports_dir = _default_reports_dir(Path(parsed.db))
             if parsed.profiles_out is None:
                 parsed.profiles_out = reports_dir / "contact-profiles.md"
             if parsed.suggestions_out is None:
@@ -70,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except CaptureError as exc:
         print(f"capture/ocr error: {exc}", file=sys.stderr)
+        return 2
+    except EmptyCaptureError as exc:
+        print(f"ingest error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("\nstopped", file=sys.stderr)
@@ -519,7 +530,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_stop_watch(args: argparse.Namespace) -> int:
-    pids = stop_watch_processes(dry_run=args.dry_run)
+    pids = stop_watch_processes(dry_run=args.dry_run, db_path=args.db)
     if not pids:
         print("没有发现正在运行的自动截图进程。")
         return 0
@@ -623,7 +634,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
     init_db(args.db)
     refresh_capture_signals(args.db)
     refresh_derived_people(args.db)
-    report_date = args.date or datetime.now().astimezone().date().isoformat()
+    report_date = _obsidian_report_date(args.date)
     vault = Path(args.vault)
     people_dir = vault / "社交圈" / "人脉"
     reports_dir = vault / "社交圈" / "分析报告"
@@ -631,18 +642,30 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     profiles = build_profiles(args.db)
+    filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
     all_suggestions = build_suggestions(args.db, limit=1000, min_score=0)
     suggestions_by_person = _suggestions_by_person(all_suggestions)
     written_contacts = []
     for profile in profiles:
         suggestion = suggestions_by_person.get(profile.name)
         evidence = _evidence_for_suggestion(args.db, suggestion) if suggestion else _brief_evidence(args.db, profile)
-        path = people_dir / f"{_safe_markdown_filename(profile.name)}.md"
-        _write_text(path, _render_obsidian_contact_markdown(profile, suggestion, evidence=evidence))
+        path = people_dir / f"{filename_by_name[profile.name]}.md"
+        _write_text(
+            path,
+            _render_obsidian_contact_markdown(
+                profile,
+                suggestion,
+                evidence=evidence,
+                filename_by_name=filename_by_name,
+            ),
+        )
         written_contacts.append(path)
     followups = build_suggestions(args.db, limit=args.limit, min_score=args.min_score)
     people_index_path = people_dir / "索引.md"
-    _write_text(people_index_path, _render_obsidian_people_index(profiles, followups))
+    _write_text(
+        people_index_path,
+        _render_obsidian_people_index(profiles, followups, filename_by_name=filename_by_name),
+    )
     status_report = build_status_report(
         args.db,
         log_file=Path(args.db).parent / "watch.log",
@@ -657,6 +680,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
             followups,
             status_report=status_report,
             min_score=args.min_score,
+            filename_by_name=filename_by_name,
         ),
     )
     print(
@@ -673,7 +697,40 @@ def _suggestions_by_person(suggestions) -> dict[str, object]:
     return result
 
 
-def _render_obsidian_contact_markdown(profile, suggestion=None, *, evidence: BriefEvidence | None = None) -> str:
+def _obsidian_report_date(value: str | None) -> str:
+    if value is None:
+        return datetime.now().astimezone().date().isoformat()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise SystemExit("--date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise SystemExit("--date must be YYYY-MM-DD") from exc
+    return value
+
+
+def _obsidian_filename_map(names) -> dict[str, str]:
+    result: dict[str, str] = {}
+    used: set[str] = set()
+    for name in sorted(dict.fromkeys(names)):
+        base = _safe_markdown_filename(name)
+        candidate = base
+        suffix = 2
+        while candidate.casefold() in used:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        used.add(candidate.casefold())
+        result[name] = candidate
+    return result
+
+
+def _render_obsidian_contact_markdown(
+    profile,
+    suggestion=None,
+    *,
+    evidence: BriefEvidence | None = None,
+    filename_by_name: dict[str, str] | None = None,
+) -> str:
     lines = [
         f"# {profile.name}",
         "",
@@ -681,9 +738,9 @@ def _render_obsidian_contact_markdown(profile, suggestion=None, *, evidence: Bri
         f"- 最近出现：{format_display_time(profile.last_seen_at)}",
     ]
     if profile.source_chats:
-        lines.append(f"- 来源群/会话：{_obsidian_contact_links(profile.source_chats)}")
+        lines.append(f"- 来源群/会话：{_obsidian_contact_links(profile.source_chats, filename_by_name=filename_by_name)}")
     if profile.speakers:
-        lines.append(f"- 近期发言人：{_obsidian_contact_links(profile.speakers)}")
+        lines.append(f"- 近期发言人：{_obsidian_contact_links(profile.speakers, filename_by_name=filename_by_name)}")
     if profile.identity_hints:
         lines.append(f"- 身份线索：{', '.join(profile.identity_hints)}")
     if profile.organizations:
@@ -736,7 +793,7 @@ def _render_obsidian_contact_markdown(profile, suggestion=None, *, evidence: Bri
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_obsidian_people_index(profiles, followups=()) -> str:
+def _render_obsidian_people_index(profiles, followups=(), *, filename_by_name: dict[str, str] | None = None) -> str:
     lines = [
         "# 人脉索引",
         "",
@@ -746,7 +803,7 @@ def _render_obsidian_people_index(profiles, followups=()) -> str:
     ]
     if followups:
         for index, suggestion in enumerate(followups, start=1):
-            lines.extend(_obsidian_index_followup_lines(index, suggestion))
+            lines.extend(_obsidian_index_followup_lines(index, suggestion, filename_by_name=filename_by_name))
     else:
         lines.append("- 暂无达到当前阈值的优先跟进。")
     lines.extend(
@@ -756,16 +813,21 @@ def _render_obsidian_people_index(profiles, followups=()) -> str:
         ]
     )
     if profiles:
-        lines.extend(_obsidian_people_index_line(profile) for profile in profiles)
+        lines.extend(_obsidian_people_index_line(profile, filename_by_name=filename_by_name) for profile in profiles)
     else:
         lines.append("- 暂无联系人档案。")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _obsidian_index_followup_lines(index: int, suggestion) -> list[str]:
+def _obsidian_index_followup_lines(
+    index: int,
+    suggestion,
+    *,
+    filename_by_name: dict[str, str] | None = None,
+) -> list[str]:
     return [
         (
-            f"{index}. {_obsidian_contact_link(suggestion.person_name)} / {suggestion.action} / "
+            f"{index}. {_obsidian_contact_link(suggestion.person_name, filename_by_name=filename_by_name)} / {suggestion.action} / "
             f"{suggestion.score}分 / {followup_strength_label(suggestion.score)}"
         ),
         f"   - 最近互动：{format_display_time(suggestion.last_interaction_at)}",
@@ -773,20 +835,20 @@ def _obsidian_index_followup_lines(index: int, suggestion) -> list[str]:
     ]
 
 
-def _obsidian_people_index_line(profile) -> str:
-    summary = _obsidian_people_index_summary(profile)
+def _obsidian_people_index_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
+    summary = _obsidian_people_index_summary(profile, filename_by_name=filename_by_name)
     return (
-        f"- {_obsidian_contact_link(profile.name)}"
+        f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}"
         f"（{_contact_kind_label(profile.kind)}，{format_display_time(profile.last_seen_at)}）：{summary}"
     )
 
 
-def _obsidian_people_index_summary(profile) -> str:
+def _obsidian_people_index_summary(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
     details = []
     if profile.source_chats:
-        details.append(f"来源：{_obsidian_contact_links(profile.source_chats)}")
+        details.append(f"来源：{_obsidian_contact_links(profile.source_chats, filename_by_name=filename_by_name)}")
     if profile.speakers:
-        details.append(f"近期发言人：{_obsidian_contact_links(profile.speakers)}")
+        details.append(f"近期发言人：{_obsidian_contact_links(profile.speakers, filename_by_name=filename_by_name)}")
     if profile.organizations:
         details.append(f"机构/公司：{', '.join(profile.organizations)}")
     if profile.identity_hints:
@@ -806,6 +868,7 @@ def _render_obsidian_daily_report(
     *,
     status_report,
     min_score: int,
+    filename_by_name: dict[str, str] | None = None,
 ) -> str:
     kind_counts = {
         "私聊/单聊": sum(1 for profile in profiles if profile.kind == "direct"),
@@ -834,24 +897,24 @@ def _render_obsidian_daily_report(
         lines.extend(["", "### 有关系信号的人脉"])
         for profile in signaled_profiles:
             signals = ", ".join(signal_label(signal) for signal in profile.signals)
-            lines.append(f"- {_obsidian_contact_link(profile.name)}：{signals}")
+            lines.append(f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}：{signals}")
 
     recent_profiles = sorted(profiles, key=lambda profile: (profile.last_seen_at, profile.name), reverse=True)[:8]
     if recent_profiles:
         lines.extend(["", "### 最近出现的人脉"])
-        lines.extend(_obsidian_recent_profile_line(profile) for profile in recent_profiles)
+        lines.extend(_obsidian_recent_profile_line(profile, filename_by_name=filename_by_name) for profile in recent_profiles)
 
     gap_profiles = [profile for profile in recent_profiles if _profile_information_gaps(profile)]
     if gap_profiles:
         lines.extend(["", "### 需要补充信息的人脉"])
-        lines.extend(_obsidian_profile_gap_line(profile) for profile in gap_profiles)
+        lines.extend(_obsidian_profile_gap_line(profile, filename_by_name=filename_by_name) for profile in gap_profiles)
 
     lines.extend(["", "## 应该主动联系的人"])
     if followups:
         for index, suggestion in enumerate(followups, start=1):
             lines.extend(
                 [
-                    f"{index}. {_obsidian_contact_link(suggestion.person_name)} / {suggestion.action} / {suggestion.score}分 / {followup_strength_label(suggestion.score)}",
+                    f"{index}. {_obsidian_contact_link(suggestion.person_name, filename_by_name=filename_by_name)} / {suggestion.action} / {suggestion.score}分 / {followup_strength_label(suggestion.score)}",
                     f"   - 最近互动：{format_display_time(suggestion.last_interaction_at)}",
                     f"   - 原因：{suggestion.why}",
                     f"   - 草稿：{suggestion.draft}",
@@ -867,18 +930,18 @@ def _safe_markdown_filename(value: str) -> str:
     return cleaned or "未命名联系人"
 
 
-def _obsidian_recent_profile_line(profile) -> str:
+def _obsidian_recent_profile_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
     details = [_contact_kind_label(profile.kind)]
     if profile.source_chats:
-        details.append(f"来源：{_obsidian_contact_links(profile.source_chats)}")
+        details.append(f"来源：{_obsidian_contact_links(profile.source_chats, filename_by_name=filename_by_name)}")
     details.append(format_display_time(profile.last_seen_at))
-    return f"- {_obsidian_contact_link(profile.name)}（{'，'.join(details)}）"
+    return f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}（{'，'.join(details)}）"
 
 
-def _obsidian_profile_gap_line(profile) -> str:
+def _obsidian_profile_gap_line(profile, *, filename_by_name: dict[str, str] | None = None) -> str:
     gaps = "；".join(_profile_information_gaps(profile))
     return (
-        f"- {_obsidian_contact_link(profile.name)}（{_contact_kind_label(profile.kind)}）："
+        f"- {_obsidian_contact_link(profile.name, filename_by_name=filename_by_name)}（{_contact_kind_label(profile.kind)}）："
         f"{gaps}；最近出现 {format_display_time(profile.last_seen_at)}"
     )
 
@@ -896,12 +959,13 @@ def _profile_information_gaps(profile) -> tuple[str, ...]:
     return tuple(gaps)
 
 
-def _obsidian_contact_link(name: str) -> str:
-    return f"[[{_safe_markdown_filename(name)}|{name}]]"
+def _obsidian_contact_link(name: str, *, filename_by_name: dict[str, str] | None = None) -> str:
+    stem = filename_by_name.get(name) if filename_by_name else None
+    return f"[[{stem or _safe_markdown_filename(name)}|{name}]]"
 
 
-def _obsidian_contact_links(names) -> str:
-    return ", ".join(_obsidian_contact_link(name) for name in names)
+def _obsidian_contact_links(names, *, filename_by_name: dict[str, str] | None = None) -> str:
+    return ", ".join(_obsidian_contact_link(name, filename_by_name=filename_by_name) for name in names)
 
 
 def _format_top_suggestion(suggestions) -> str:
@@ -1348,7 +1412,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                     app_name=app_name,
                     state=log_state,
                 )
-            except CaptureError as exc:
+            except (CaptureError, EmptyCaptureError) as exc:
                 _log_watch(args, "error", str(exc), app_name=app_name, state=log_state)
         else:
             detail = f"{status.detail} via {status.method}" if not app_name else f"not target app via {status.method}"

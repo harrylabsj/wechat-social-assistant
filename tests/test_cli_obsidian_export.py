@@ -116,6 +116,81 @@ class ObsidianExportCommandTests(unittest.TestCase):
         self.assertIn("[[群成员A|群成员A]] / 项目跟进 / 50分", report_text)
         self.assertIn("草稿：群成员A，上次你在「项目交流群（3）」里提到", report_text)
 
+    def test_obsidian_export_rejects_report_date_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            vault = root / "Obsidian Vault"
+            init_db(db_path)
+
+            with self.assertRaisesRegex(SystemExit, "--date"):
+                main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "export-obsidian",
+                        "--vault",
+                        str(vault),
+                        "--date",
+                        "../人脉/索引",
+                    ]
+                )
+
+            self.assertFalse((vault / "社交圈").exists())
+
+    def test_obsidian_export_disambiguates_sanitized_filename_collisions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            vault = root / "Obsidian Vault"
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="A/B\n最近看到一个想法。",
+                contact_hint="A/B",
+                source="test",
+                captured_at="2026-05-26T22:21:20+08:00",
+            )
+            ingest_capture(
+                db_path,
+                raw_text="A:B\n下周方便聊聊吗？",
+                contact_hint="A:B",
+                source="test",
+                captured_at="2026-05-26T22:22:20+08:00",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "export-obsidian",
+                        "--vault",
+                        str(vault),
+                        "--date",
+                        "2026-05-27",
+                    ]
+                )
+
+            people_dir = vault / "社交圈" / "人脉"
+            first_path = people_dir / "A-B.md"
+            second_path = people_dir / "A-B-2.md"
+            first_exists = first_path.exists()
+            second_exists = second_path.exists()
+            first_text = first_path.read_text(encoding="utf-8")
+            second_text = second_path.read_text(encoding="utf-8")
+            index_text = (people_dir / "索引.md").read_text(encoding="utf-8")
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("exported contacts=2", stdout.getvalue())
+        self.assertTrue(first_exists)
+        self.assertTrue(second_exists)
+        self.assertIn("# A/B", first_text)
+        self.assertIn("# A:B", second_text)
+        self.assertIn("[[A-B|A/B]]", index_text)
+        self.assertIn("[[A-B-2|A:B]]", index_text)
+
 
 if __name__ == "__main__":
     unittest.main()

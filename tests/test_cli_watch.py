@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from wsa.cli import WatchLogState, _append_watch_log, _should_emit_watch_log, _watch_log_line, build_parser, cmd_watch
+from wsa.cli import WatchLogState, _append_watch_log, _should_emit_watch_log, _watch_log_line, build_parser, cmd_watch, main
 
 
 class WatchLogTests(unittest.TestCase):
@@ -28,6 +28,13 @@ class WatchLogTests(unittest.TestCase):
 
         self.assertEqual("stop", args.command)
         self.assertTrue(args.dry_run)
+
+    def test_stop_watch_command_passes_selected_database_to_process_filter(self):
+        with patch("wsa.cli.stop_watch_processes", return_value=()) as stop_watch:
+            exit_code = main(["--db", "/tmp/a/social.db", "stop-watch", "--dry-run"])
+
+        self.assertEqual(0, exit_code)
+        stop_watch.assert_called_once_with(dry_run=True, db_path=Path("/tmp/a/social.db"))
 
     def test_watch_log_line_includes_time_app_action_and_detail(self):
         line = _watch_log_line(

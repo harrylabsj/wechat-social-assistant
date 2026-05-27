@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wsa.cli import main
+from wsa.cli import build_parser, main
 from wsa.store import connect, ingest_capture, init_db
 
 
@@ -20,6 +20,15 @@ class AnalyzeCommandTests(unittest.TestCase):
 
             self.assertTrue((root / "reports" / "contact-profiles.md").exists())
             self.assertTrue((root / "reports" / "outreach.md").exists())
+
+    def test_analyze_parser_defaults_reports_next_to_flat_database(self):
+        parser = build_parser()
+        db_path = Path("/tmp/wsa-flat/social.db")
+
+        args = parser.parse_args(["--db", str(db_path), "analyze"])
+
+        self.assertEqual(Path("/tmp/wsa-flat/reports/contact-profiles.md"), args.profiles_out)
+        self.assertEqual(Path("/tmp/wsa-flat/reports/outreach.md"), args.suggestions_out)
 
     def test_analyze_writes_profiles_suggestions_and_prints_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
