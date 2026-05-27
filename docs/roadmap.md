@@ -23,10 +23,13 @@
 - CLI `quality` renders a relationship operating desk.
 - MCP `get_relationship_quality` and `wsa://relationship-quality` expose the same read-only quality layer to agent ecosystems.
 
-## v0.5 Feedback Loop
+## v0.5 Feedback Loop - shipped
 
 - Local feedback actions: mark done, snooze, not relevant, too pushy, good draft, wrong person, already close, and do not contact.
 - Use feedback to tune frequency, tone, thresholds, and draft style.
+- CLI `feedback` and `feedback-list` provide an auditable local feedback log.
+- Suggestions suppress done/snoozed/not relevant/do-not-contact items and tune draft tone/score from `too_pushy` and `good_draft`.
+- MCP `record_feedback` is the only v0.5 write tool and requires explicit confirmation.
 
 ## v0.6 Group and Event Discovery
 

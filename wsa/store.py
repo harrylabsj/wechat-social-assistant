@@ -46,11 +46,23 @@ create table if not exists capture_signals (
     unique(capture_id, kind)
 );
 
+create table if not exists contact_feedback (
+    id integer primary key autoincrement,
+    person_name text not null,
+    action text not null,
+    note text not null default '',
+    until_at text,
+    created_at text not null
+);
+
 create index if not exists idx_people_last_interaction
 on people(last_interaction_at);
 
 create index if not exists idx_captures_person_time
 on captures(person_id, captured_at);
+
+create index if not exists idx_contact_feedback_person_time
+on contact_feedback(person_name, created_at);
 """
 
 
@@ -72,6 +84,7 @@ class ResetResult:
     removed_people: int
     removed_captures: int
     removed_signals: int
+    removed_feedback: int
     removed_screenshots: int
     dry_run: bool = False
 
@@ -221,10 +234,12 @@ def reset_memory(
         removed_people = int(conn.execute("select count(*) from people").fetchone()[0])
         removed_captures = int(conn.execute("select count(*) from captures").fetchone()[0])
         removed_signals = int(conn.execute("select count(*) from capture_signals").fetchone()[0])
+        removed_feedback = int(conn.execute("select count(*) from contact_feedback").fetchone()[0])
         if not dry_run:
             conn.execute("delete from capture_signals")
             conn.execute("delete from captures")
             conn.execute("delete from people")
+            conn.execute("delete from contact_feedback")
             conn.commit()
 
     screenshot_files = _screenshot_files(screenshots)
@@ -238,6 +253,7 @@ def reset_memory(
         removed_people=removed_people,
         removed_captures=removed_captures,
         removed_signals=removed_signals,
+        removed_feedback=removed_feedback,
         removed_screenshots=len(screenshot_files),
         dry_run=dry_run,
     )

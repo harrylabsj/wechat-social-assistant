@@ -19,6 +19,13 @@ from .cli import (
     _render_contacts_markdown,
     _render_obsidian_daily_report,
 )
+from .feedback import (
+    FEEDBACK_ACTIONS,
+    feedback_to_dict,
+    list_feedback,
+    record_feedback,
+    render_feedback_markdown,
+)
 from .profiles import ContactProfile, build_profiles
 from .relationship_quality import (
     build_relationship_quality_cards,
@@ -31,7 +38,7 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 MCP_TOOLS = [
     {
@@ -115,6 +122,42 @@ MCP_TOOLS = [
             },
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "list_feedback",
+        "description": "Read local feedback records for follow-up suggestions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {"type": "string", "description": "Optional contact filter."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "record_feedback",
+        "description": "Write a local feedback record after explicit user confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["contact_name", "action", "confirmed", "confirmation_text"],
+            "properties": {
+                "contact_name": {"type": "string", "description": "Contact name."},
+                "action": {"type": "string", "enum": list(FEEDBACK_ACTIONS)},
+                "note": {"type": "string", "description": "Optional user note."},
+                "until_at": {"type": "string", "description": "Required for snooze; ISO timestamp."},
+                "created_at": {"type": "string", "description": "Optional audit timestamp override."},
+                "confirmed": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": "Must exactly equal: record local feedback",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
     },
     {
         "name": "list_recent_captures",
@@ -273,6 +316,8 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_next_followup": _tool_get_next_followup,
         "get_daily_report": _tool_get_daily_report,
         "get_relationship_quality": _tool_get_relationship_quality,
+        "list_feedback": _tool_list_feedback,
+        "record_feedback": _tool_record_feedback,
         "list_recent_captures": _tool_list_recent_captures,
     }
     handler = handlers.get(name)
@@ -493,6 +538,44 @@ def _tool_get_relationship_quality(arguments: dict[str, Any]) -> dict[str, Any]:
             "cards": [quality_card_to_dict(card) for card in cards],
         },
     )
+
+
+def _tool_list_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
+    records = list_feedback(
+        _db_path(arguments),
+        person_name=_optional_str(arguments.get("contact_name") or arguments.get("contact")),
+        limit=_limit(arguments.get("limit"), default=50),
+    )
+    return _tool_result(
+        render_feedback_markdown(records),
+        {"feedback": [feedback_to_dict(record) for record in records]},
+    )
+
+
+def _tool_record_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("confirmed") is not True or arguments.get("confirmation_text") != "record local feedback":
+        raise ValueError("record_feedback requires confirmed=true and confirmation_text='record local feedback'")
+    contact_name = str(arguments.get("contact_name") or arguments.get("contact") or "").strip()
+    action = str(arguments.get("action") or "").strip()
+    record = record_feedback(
+        _db_path(arguments),
+        person_name=contact_name,
+        action=action,
+        note=str(arguments.get("note") or ""),
+        until_at=_optional_str(arguments.get("until_at") or arguments.get("until")),
+        created_at=_optional_str(arguments.get("created_at")),
+    )
+    text = (
+        "# 已记录反馈\n\n"
+        f"- 联系人：{record.person_name}\n"
+        f"- 动作：{record.action}\n"
+        f"- 时间：{record.created_at}\n"
+    )
+    if record.until_at:
+        text += f"- 生效到：{record.until_at}\n"
+    if record.note:
+        text += f"- 备注：{record.note}\n"
+    return _tool_result(text, {"feedback": feedback_to_dict(record)})
 
 
 def _tool_list_recent_captures(arguments: dict[str, Any]) -> dict[str, Any]:

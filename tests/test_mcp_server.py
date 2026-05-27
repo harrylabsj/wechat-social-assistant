@@ -23,6 +23,8 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_next_followup",
                 "get_daily_report",
                 "get_relationship_quality",
+                "list_feedback",
+                "record_feedback",
                 "list_recent_captures",
             ],
             tool_names,
@@ -95,6 +97,7 @@ class MCPServerContractTests(unittest.TestCase):
             followup = _call_tool("get_next_followup", db_path=db_path, contact_name="张三", min_score=0)
             daily = _call_tool("get_daily_report", db_path=db_path, date="2026-05-27", min_score=0)
             quality = _call_tool("get_relationship_quality", db_path=db_path, contact_name="张三", min_score=0)
+            feedback = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
@@ -111,6 +114,7 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual("张三", quality["structuredContent"]["cards"][0]["name"])
         self.assertIn("relationship_strength", quality["structuredContent"]["cards"][0]["scores"])
         self.assertTrue(quality["structuredContent"]["cards"][0]["scores"]["relationship_strength"]["evidence"])
+        self.assertEqual([], feedback["structuredContent"]["feedback"])
         self.assertEqual(2, len(recent["structuredContent"]["captures"]))
         self.assertEqual("增长交流群（3）", recent["structuredContent"]["captures"][0]["contact_name"])
 
@@ -153,6 +157,42 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("只读", prompt["result"]["messages"][0]["content"]["text"])
         self.assertEqual("wsa://relationship-quality", quality["result"]["contents"][0]["uri"])
         self.assertIn("# 关系运营台", quality["result"]["contents"][0]["text"])
+
+    def test_record_feedback_mcp_tool_requires_explicit_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            rejected = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "record_feedback",
+                        "arguments": {
+                            "db_path": str(db_path),
+                            "contact_name": "张三",
+                            "action": "too_pushy",
+                        },
+                    },
+                }
+            )
+            accepted = _call_tool(
+                "record_feedback",
+                db_path=db_path,
+                contact_name="张三",
+                action="too_pushy",
+                note="语气太主动",
+                confirmed=True,
+                confirmation_text="record local feedback",
+                created_at="2026-05-27T10:00:00+08:00",
+            )
+            listed = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
+
+        self.assertEqual(-32602, rejected["error"]["code"])
+        self.assertEqual("too_pushy", accepted["structuredContent"]["feedback"]["action"])
+        self.assertEqual("张三", listed["structuredContent"]["feedback"][0]["person_name"])
 
     def test_module_cli_help_is_available(self):
         result = subprocess.run(

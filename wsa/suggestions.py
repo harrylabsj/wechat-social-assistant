@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import re
 
 from .parser import TIME_RE, extract_signals, is_noise_line
+from .feedback import FeedbackRecord, feedback_by_person
 from .profiles import (
     build_profiles,
     extract_files,
@@ -87,10 +88,9 @@ def build_suggestions(
                 as_of=now,
                 evidence_captured_at=_evidence_captured_at(signal_captures, signals),
             )
-            if suggestion.score >= min_score:
-                chat_suggestions.append(suggestion)
+            chat_suggestions.append(suggestion)
 
-    speaker_suggestions = _speaker_suggestions(db_path, as_of=now, min_score=min_score)
+    speaker_suggestions = _speaker_suggestions(db_path, as_of=now, min_score=0)
     speaker_source_chats = {
         source_chat
         for suggestion in speaker_suggestions
@@ -102,6 +102,8 @@ def build_suggestions(
         if not (is_group_chat_name(suggestion.person_name) and suggestion.person_name in speaker_source_chats)
     ]
     suggestions.extend(speaker_suggestions)
+    suggestions = _apply_feedback(db_path, suggestions, as_of=now)
+    suggestions = [suggestion for suggestion in suggestions if suggestion.score >= min_score]
     return sorted(suggestions, key=lambda item: (-item.score, item.person_name))[:limit]
 
 
@@ -125,6 +127,68 @@ def _speaker_suggestions(db_path: Path | str, *, as_of: datetime, min_score: int
         if suggestion.score >= min_score:
             suggestions.append(suggestion)
     return suggestions
+
+
+def _apply_feedback(
+    db_path: Path | str,
+    suggestions: list[Suggestion],
+    *,
+    as_of: datetime,
+) -> list[Suggestion]:
+    grouped = feedback_by_person(db_path)
+    tuned: list[Suggestion] = []
+    for suggestion in suggestions:
+        records = grouped.get(suggestion.person_name, [])
+        if _is_suppressed_by_feedback(suggestion, records, as_of=as_of):
+            continue
+        tuned.append(_tune_suggestion_with_feedback(suggestion, records))
+    return tuned
+
+
+def _is_suppressed_by_feedback(
+    suggestion: Suggestion,
+    records: list[FeedbackRecord],
+    *,
+    as_of: datetime,
+) -> bool:
+    for record in records:
+        if record.action == "do_not_contact":
+            return True
+        if record.action == "snooze" and record.until_at and _parse_dt(record.until_at) > as_of:
+            return True
+        if record.action in {"mark_done", "not_relevant", "wrong_person", "already_close"}:
+            if _feedback_covers_current_suggestion(record, suggestion):
+                return True
+    return False
+
+
+def _feedback_covers_current_suggestion(record: FeedbackRecord, suggestion: Suggestion) -> bool:
+    evidence_at = suggestion.evidence_captured_at or suggestion.last_interaction_at
+    return _parse_dt(record.created_at) >= _parse_dt(evidence_at)
+
+
+def _tune_suggestion_with_feedback(suggestion: Suggestion, records: list[FeedbackRecord]) -> Suggestion:
+    tuned = suggestion
+    if any(record.action == "too_pushy" for record in records):
+        tuned = replace(
+            tuned,
+            score=max(0, tuned.score - 20),
+            why=f"{tuned.why}；上次草稿反馈：太主动",
+            draft=_soften_draft(tuned.draft),
+        )
+    if any(record.action == "good_draft" for record in records):
+        tuned = replace(
+            tuned,
+            score=min(200, tuned.score + 5),
+            why=f"{tuned.why}；用户反馈过类似草稿可用",
+        )
+    return tuned
+
+
+def _soften_draft(draft: str) -> str:
+    if "不急" in draft:
+        return draft
+    return f"{draft} 不急，你方便的时候再看就好。"
 
 
 def render_markdown(

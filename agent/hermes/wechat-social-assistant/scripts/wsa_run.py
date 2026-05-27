@@ -10,6 +10,7 @@ from pathlib import Path
 READ_COMMANDS = {
     "status",
     "contacts",
+    "feedback-list",
     "brief",
     "quality",
     "next",
@@ -25,6 +26,7 @@ WRITE_COMMANDS = {
     "ingest-image",
     "analyze",
     "export-obsidian",
+    "feedback",
     "watch",
     "stop-watch",
     "stop",

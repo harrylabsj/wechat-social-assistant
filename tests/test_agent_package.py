@@ -19,7 +19,7 @@ class AgentPackageTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
-        self.assertEqual("0.4.0", manifest["version"])
+        self.assertEqual("0.5.0", manifest["version"])
         self.assertEqual("python3 -m wsa.cli", manifest["cli"]["entrypoint"])
         self.assertEqual("python3 -m wsa.mcp_server", manifest["mcp"]["command"])
         self.assertEqual("stdio", manifest["mcp"]["transport"])
@@ -29,9 +29,12 @@ class AgentPackageTests(unittest.TestCase):
         self.assertIn("claude-code", manifest["ecosystems"])
         self.assertEqual("local-first", manifest["data_policy"]["storage"])
         self.assertTrue(manifest["data_policy"]["requires_user_confirmation_for_writes"])
-        self.assertTrue(manifest["mcp"]["read_only"])
+        self.assertFalse(manifest["mcp"]["read_only"])
+        self.assertTrue(manifest["mcp"]["write_tools_require_confirmation"])
         self.assertIn("get_contact_brief", manifest["mcp"]["tools"])
         self.assertIn("get_relationship_quality", manifest["mcp"]["tools"])
+        self.assertIn("list_feedback", manifest["mcp"]["tools"])
+        self.assertIn("record_feedback", manifest["mcp"]["tools"])
         self.assertIn("wsa://daily-report", manifest["mcp"]["resources"])
         self.assertIn("wsa://relationship-quality", manifest["mcp"]["resources"])
         self.assertIn("contact-followup", manifest["mcp"]["prompts"])
@@ -44,6 +47,8 @@ class AgentPackageTests(unittest.TestCase):
                 "contacts",
                 "brief",
                 "quality",
+                "feedback",
+                "feedback-list",
                 "next",
                 "suggest",
                 "analyze",
@@ -66,6 +71,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertIn("wsa-mcp", text)
         self.assertIn("python3 -m wsa.mcp_server", text)
         self.assertIn("wsa quality", text)
+        self.assertIn("wsa feedback", text)
         self.assertIn("wsa analyze", text)
         self.assertIn("wsa export-obsidian", text)
         self.assertIn("Never send WeChat messages automatically", text)
@@ -104,7 +110,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
         payload = json.loads(doctor_result.stdout)
         self.assertEqual("wechat-social-assistant", payload["agent_id"])
-        self.assertEqual("0.4.0", payload["version"])
+        self.assertEqual("0.5.0", payload["version"])
         self.assertIn("checks", payload)
         self.assertIn("cli_importable", {check["id"] for check in payload["checks"]})
         self.assertIn("mcp_importable", {check["id"] for check in payload["checks"]})
@@ -112,6 +118,8 @@ class AgentPackageTests(unittest.TestCase):
         self.assertEqual(0, runner_result.returncode, runner_result.stderr)
         self.assertIn("status", runner_result.stdout)
         self.assertIn("quality", runner_result.stdout)
+        self.assertIn("feedback", runner_result.stdout)
+        self.assertIn("feedback-list", runner_result.stdout)
         self.assertIn("export-obsidian", runner_result.stdout)
 
         installer_text = installer.read_text(encoding="utf-8")

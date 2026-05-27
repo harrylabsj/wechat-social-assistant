@@ -8,6 +8,7 @@ import re
 import sys
 import time
 
+from .feedback import FEEDBACK_ACTIONS, list_feedback, record_feedback, render_feedback_markdown
 from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
@@ -171,6 +172,20 @@ def build_parser() -> argparse.ArgumentParser:
     quality.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     quality.add_argument("--out", type=Path)
     quality.set_defaults(func=cmd_quality)
+
+    feedback = sub.add_parser("feedback", help="Record local feedback for a contact suggestion.")
+    feedback.add_argument("contact", help="Contact name.")
+    feedback.add_argument("action", choices=FEEDBACK_ACTIONS)
+    feedback.add_argument("--note", default="")
+    feedback.add_argument("--until", dest="until_at", help="Required for snooze; ISO timestamp or date.")
+    feedback.add_argument("--created-at", help="Override feedback creation time for imports/tests.")
+    feedback.set_defaults(func=cmd_feedback)
+
+    feedback_list = sub.add_parser("feedback-list", help="List local feedback records.")
+    feedback_list.add_argument("--contact", help="Only list feedback for one contact.")
+    feedback_list.add_argument("--limit", type=int, default=50)
+    feedback_list.add_argument("--out", type=Path)
+    feedback_list.set_defaults(func=cmd_feedback_list)
 
     status = sub.add_parser("status", help="Summarize database, screenshots, and watch log state.")
     status.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
@@ -553,6 +568,32 @@ def cmd_quality(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_feedback(args: argparse.Namespace) -> int:
+    result = record_feedback(
+        args.db,
+        person_name=args.contact,
+        action=args.action,
+        note=args.note,
+        until_at=args.until_at,
+        created_at=args.created_at,
+    )
+    until = f" until={format_display_time(result.until_at)}" if result.until_at else ""
+    print(f"recorded feedback id={result.id} contact={result.person_name} action={result.action}{until}")
+    return 0
+
+
+def cmd_feedback_list(args: argparse.Namespace) -> int:
+    records = list_feedback(args.db, person_name=args.contact, limit=args.limit)
+    markdown = render_feedback_markdown(records)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
     print(render_status_report(report), end="")
@@ -581,6 +622,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         f"{prefix}: people={result.removed_people} "
         f"captures={result.removed_captures} "
         f"signals={result.removed_signals} "
+        f"feedback={result.removed_feedback} "
         f"screenshots={result.removed_screenshots}"
     )
     return 0

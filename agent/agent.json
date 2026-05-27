@@ -2,7 +2,7 @@
   "schema_version": "2026-05-27",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -20,7 +20,8 @@
     "command": "python3 -m wsa.mcp_server",
     "console_script": "wsa-mcp",
     "transport": "stdio",
-    "read_only": true,
+    "read_only": false,
+    "write_tools_require_confirmation": true,
     "tools": [
       "get_status",
       "search_contacts",
@@ -28,6 +29,8 @@
       "get_next_followup",
       "get_daily_report",
       "get_relationship_quality",
+      "list_feedback",
+      "record_feedback",
       "list_recent_captures"
     ],
     "resources": [
@@ -41,13 +44,14 @@
       "contact-followup",
       "safe-capture-review"
     ],
-    "write_policy": "No mutating MCP tools are exposed in v0.4; use confirmed CLI commands for writes."
+    "write_policy": "record_feedback is the only mutating MCP tool in v0.5 and requires confirmed=true plus confirmation_text='record local feedback'."
   },
   "capabilities": [
     "local_status",
     "contact_search",
     "contact_brief",
     "relationship_quality",
+    "feedback_loop",
     "followup_suggestions",
     "daily_analysis",
     "mcp_read_only_interface",
@@ -75,6 +79,17 @@
       "name": "quality",
       "mode": "read",
       "example": "python3 -m wsa.cli quality --contact NAME"
+    },
+    {
+      "name": "feedback-list",
+      "mode": "read",
+      "example": "python3 -m wsa.cli feedback-list --contact NAME"
+    },
+    {
+      "name": "feedback",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli feedback NAME too_pushy --note 'draft was too direct'"
     },
     {
       "name": "next",

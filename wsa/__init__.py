@@ -1,3 +1,3 @@
 """Local-first social relationship assistant for visible WeChat content."""
 
-__all__ = ["parser", "store", "suggestions", "ocr", "mcp_server", "relationship_quality"]
+__all__ = ["parser", "store", "suggestions", "ocr", "mcp_server", "relationship_quality", "feedback"]

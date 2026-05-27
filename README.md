@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v0.4）
+## Agent 生态（v0.5）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.4 提供只读 MCP stdio server 和关系质量层，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 直接查询本地关系记忆。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v0.5 提供 MCP stdio server、关系质量层和本地反馈闭环，适合 Hermes、Claude Desktop、Codex 或其他支持 MCP 的 agent 查询本地关系记忆，并在用户确认后记录反馈。
 
 仓库提供：
 
@@ -37,7 +37,7 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v0.4 暴露的 MCP tools 全部只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_recent_captures`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`。写入、截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
+v0.5 暴露的 MCP tools 大部分只读：`get_status`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_relationship_quality`、`list_feedback`、`list_recent_captures`。唯一写入工具是 `record_feedback`，必须带 `confirmed=true` 和 `confirmation_text="record local feedback"`。Resources 包括 `wsa://status`、`wsa://contacts`、`wsa://daily-report`、`wsa://relationship-quality`。截图、导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 ## 快速开始
 
@@ -106,6 +106,17 @@ python3 -m wsa.cli quality --contact 群成员A --min-score 0
 ```
 
 `quality` 会按联系人生成可解释的关系质量卡，包含总分、关系强度、最近互动、互惠、场景、风险、资料缺口和下一步动作。每个分数都会附带本地采集证据，包括来源会话、采集时间、摘要和截图路径（如果有），避免出现无法追溯的玄学评分。
+
+记录用户反馈，让系统逐渐学习你的社交风格：
+
+```bash
+python3 -m wsa.cli feedback 李四 too_pushy --note "太主动，放轻一点"
+python3 -m wsa.cli feedback 李四 good_draft
+python3 -m wsa.cli feedback 李四 snooze --until 2026-05-30T09:00:00+08:00
+python3 -m wsa.cli feedback-list --contact 李四
+```
+
+支持的反馈动作包括 `mark_done`、`snooze`、`not_relevant`、`too_pushy`、`good_draft`、`wrong_person`、`already_close`、`do_not_contact`。这些反馈会保存在本地数据库里，可审计、可列出；后续建议会据此调整频率、阈值和语气，例如 `snooze` 会暂时隐藏建议，`mark_done` 会在有新证据前隐藏当前建议，`too_pushy` 会降低分数并让草稿更克制，`good_draft` 会轻微增强同类草稿。
 
 只查看当前最值得跟进的一条，并直接显示可改写的微信草稿：
 
