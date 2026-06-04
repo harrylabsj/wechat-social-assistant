@@ -72,12 +72,16 @@
     "daily_analysis",
     "weekly_analysis",
     "relationship_dashboard",
+    "relationship_cockpit",
     "multi_source_inputs",
+    "wechat_archive_manifest_import",
     "mcp_read_only_interface",
     "obsidian_export",
     "obsidian_import",
     "manual_enrichment",
     "ocr_import",
+    "hotkey_shortcuts",
+    "watch_interval_settings",
     "explicit_watch_mode"
   ],
   "commands": [
@@ -122,6 +126,12 @@
       "name": "dashboard",
       "mode": "read",
       "example": "python3 -m wsa.cli dashboard"
+    },
+    {
+      "name": "cockpit",
+      "mode": "write-database-and-reports",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli cockpit --vault \"$HOME/Hbrain\" --yes --replace-wechat-archive"
     },
     {
       "name": "candidates",
@@ -190,10 +200,28 @@
       "example": "python3 -m wsa.cli import-source ./contacts.vcf --yes"
     },
     {
+      "name": "import-wechat-archive",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-wechat-archive --yes --replace"
+    },
+    {
       "name": "import-image",
       "mode": "write-database",
       "requires_confirmation": true,
       "example": "python3 -m wsa.cli import-image ./screenshot.png --contact NAME"
+    },
+    {
+      "name": "quick-capture",
+      "mode": "capture",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli quick-capture"
+    },
+    {
+      "name": "watch-interval",
+      "mode": "write-settings",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli watch-interval 10"
     },
     {
       "name": "watch",
@@ -212,7 +240,7 @@
     "storage": "local-first",
     "database": "data/social.db by default",
     "manual_enrichment": "contact_enrichments rows inside data/social.db",
-    "relationship_sources": "relationship_sources rows inside data/social.db from user-provided local files",
+    "relationship_sources": "relationship_sources rows inside data/social.db from user-provided local files and safe WeChat archive manifest metadata",
     "screenshots": "data/captures by default",
     "reads_wechat_database": false,
     "sends_messages": false,

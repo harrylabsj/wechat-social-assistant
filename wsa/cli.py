@@ -26,6 +26,7 @@ from .enrichment import (
     ENRICHMENT_FIELDS,
     enrichment_by_person,
     enrichment_summary,
+    list_contact_enrichments,
 )
 from .feedback import FEEDBACK_ACTIONS, list_feedback, record_feedback, render_feedback_markdown
 from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
@@ -38,6 +39,7 @@ from .sources import (
     list_relationship_sources,
     render_relationship_sources_markdown,
 )
+from .settings import load_settings, save_watch_interval, settings_path_for_db
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
 from .store import (
     EmptyCaptureError,
@@ -52,6 +54,12 @@ from .store import (
 )
 from .suggestions import build_suggestions, followup_strength_label, render_markdown
 from .timefmt import format_display_time
+from .wechat_archive import (
+    default_wechat_archive_manifest,
+    delete_wechat_archive_sources,
+    import_wechat_archive_manifest,
+    render_wechat_archive_import_markdown,
+)
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
@@ -142,6 +150,18 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     capture.set_defaults(func=cmd_capture)
 
+    quick_capture = sub.add_parser(
+        "quick-capture",
+        aliases=["qc"],
+        help="Immediately capture the current screen with hotkey-friendly defaults.",
+    )
+    quick_capture.add_argument("--contact", help="Contact name hint.")
+    quick_capture.add_argument("--mode", choices=["screen", "window"], default="screen")
+    quick_capture.add_argument("--source", default="hotkey")
+    quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
+    quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="wechat-chat")
+    quick_capture.set_defaults(func=cmd_quick_capture)
+
     ocr = sub.add_parser("ocr-image", help="Run OCR for an existing image.")
     ocr.add_argument("image", type=Path)
     ocr.set_defaults(func=cmd_ocr_image)
@@ -161,12 +181,14 @@ def build_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--min-score", type=int, default=45, help="Only include suggestions with score >= N.")
     suggest.add_argument("--contact", help="Only include suggestions matching this contact or source chat.")
     suggest.add_argument("--title", default="社交跟进建议")
+    suggest.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     suggest.add_argument("--out", type=Path)
     suggest.set_defaults(func=cmd_suggest)
 
     next_cmd = sub.add_parser("next", help="Print the single highest-priority follow-up draft.")
     next_cmd.add_argument("--min-score", type=int, default=45, help="Only show a suggestion with score >= N.")
     next_cmd.add_argument("--contact", help="Only search suggestions matching this contact or source chat.")
+    next_cmd.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     next_cmd.add_argument("--draft-only", action="store_true", help="Only print the draft text for easy copying.")
     next_cmd.set_defaults(func=cmd_next)
 
@@ -181,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("query", nargs="?", help="Contact name, source group, organization, or identity hint.")
     brief.add_argument("--contact", help="Contact name, source group, organization, or identity hint.")
     brief.add_argument("--min-score", type=int, default=0, help="Only show a suggestion with score >= N.")
+    brief.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     brief.add_argument("--out", type=Path)
     brief.set_defaults(func=cmd_brief)
 
@@ -205,6 +228,43 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     dashboard.add_argument("--out", type=Path)
     dashboard.set_defaults(func=cmd_dashboard)
+
+    wechat_archive = sub.add_parser(
+        "import-wechat-archive",
+        help="Import safe relationship signals from a WeChat archive manifest TSV.",
+    )
+    wechat_archive.add_argument("--manifest", type=Path, default=default_wechat_archive_manifest())
+    wechat_archive.add_argument("--limit", type=int, default=300)
+    wechat_archive.add_argument("--min-score", type=int, default=35)
+    wechat_archive.add_argument("--contact-hint", action="append", default=[])
+    wechat_archive.add_argument("--include-unmatched", action="store_true", help="Also import high-value unmatched archive files.")
+    wechat_archive.add_argument("--only-matched", action="store_true", help="Only import rows matched to known contacts.")
+    wechat_archive.add_argument("--include-sensitive", action="store_true", help="Include high-sensitive filenames.")
+    wechat_archive.add_argument("--replace", action="store_true", help="Replace existing WeChat archive source rows first.")
+    wechat_archive.add_argument("--yes", action="store_true", help="Required to write imported archive sources.")
+    wechat_archive.add_argument("--dry-run", action="store_true", help="Preview importable archive sources without writing.")
+    wechat_archive.add_argument("--imported-at", help="Override import timestamp for tests/imports.")
+    wechat_archive.add_argument("--out", type=Path)
+    wechat_archive.set_defaults(func=cmd_import_wechat_archive)
+
+    cockpit = sub.add_parser(
+        "cockpit",
+        help="Build the full relationship cockpit from WeChat archive, contact notes, and local memory.",
+    )
+    cockpit.add_argument("--vault", type=Path, default=Path.home() / "Hbrain")
+    cockpit.add_argument("--wechat-manifest", type=Path, default=default_wechat_archive_manifest())
+    cockpit.add_argument("--out", type=Path)
+    cockpit.add_argument("--limit", type=int, default=8)
+    cockpit.add_argument("--archive-limit", type=int, default=300)
+    cockpit.add_argument("--min-score", type=int, default=45)
+    cockpit.add_argument("--archive-min-score", type=int, default=35)
+    cockpit.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
+    cockpit.add_argument("--include-sensitive", action="store_true", help="Include high-sensitive archive filenames.")
+    cockpit.add_argument("--replace-wechat-archive", action="store_true", help="Replace existing WeChat archive source rows first.")
+    cockpit.add_argument("--yes", action="store_true", help="Required to import sources before rendering.")
+    cockpit.add_argument("--dry-run", action="store_true", help="Preview source imports; render from current DB.")
+    cockpit.add_argument("--imported-at", help="Override import timestamp for tests/imports.")
+    cockpit.set_defaults(func=cmd_cockpit)
 
     candidates = sub.add_parser("candidates", help="Discover relationship candidates from group/event contexts.")
     candidates.add_argument("--min-confidence", type=int, default=45, help="Only include candidates with confidence >= N.")
@@ -243,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Summarize database, screenshots, and watch log state.")
     status.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
     status.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
+    status.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     status.set_defaults(func=cmd_status)
 
     audit = sub.add_parser("audit", help="Render a local data audit report.")
@@ -268,6 +329,14 @@ def build_parser() -> argparse.ArgumentParser:
     stop_watch.add_argument("--dry-run", action="store_true", help="Only list matching watch processes.")
     stop_watch.set_defaults(func=cmd_stop_watch)
 
+    watch_interval = sub.add_parser(
+        "watch-interval",
+        aliases=["interval"],
+        help="Show or set the saved default watch polling interval in seconds.",
+    )
+    watch_interval.add_argument("seconds", type=int, nargs="?", help="New default interval in seconds. Minimum is 5.")
+    watch_interval.set_defaults(func=cmd_watch_interval)
+
     reset = sub.add_parser("reset", help="Clear local database rows and captured screenshots.")
     reset.add_argument("--yes", action="store_true", help="Actually clear data. Required unless --dry-run is used.")
     reset.add_argument("--dry-run", action="store_true", help="Only show what would be cleared.")
@@ -280,6 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--contact", help="Only include profiles and suggestions matching this contact or source chat.")
     analyze.add_argument("--profiles-out", type=Path)
     analyze.add_argument("--suggestions-out", type=Path)
+    analyze.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     analyze.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
     analyze.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
     analyze.set_defaults(func=cmd_analyze)
@@ -290,6 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     obsidian.add_argument("--vault", type=Path, default=DEFAULT_OBSIDIAN_VAULT, help="Obsidian vault root.")
     obsidian.add_argument("--date", help="Report date as YYYY-MM-DD. Defaults to today.")
+    obsidian.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     obsidian.add_argument("--min-score", type=int, default=45, help="Only include proactive follow-ups with score >= N.")
     obsidian.add_argument("--limit", type=int, default=20, help="Maximum follow-ups in the daily report.")
     obsidian.set_defaults(func=cmd_export_obsidian)
@@ -324,6 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     weekly = sub.add_parser("weekly-report", help="Render a weekly relationship report.")
     weekly.add_argument("--date", help="Any date inside the ISO week. Defaults to today.")
+    weekly.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     weekly.add_argument("--min-score", type=int, default=45, help="Only include proactive follow-ups with score >= N.")
     weekly.add_argument("--limit", type=int, default=20, help="Maximum follow-ups in the weekly report.")
     weekly.add_argument("--out", type=Path)
@@ -333,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     watch = sub.add_parser("watch", help="Explicitly watch the frontmost WeChat window and ingest changed OCR text.")
     watch.add_argument("--contact", help="Contact name hint; omit to guess from OCR.")
-    watch.add_argument("--interval", type=int, default=60)
+    watch.add_argument("--interval", type=int, help="Polling interval in seconds. Defaults to saved watch-interval setting.")
     watch.add_argument("--mode", choices=["screen", "window"], default="screen")
     watch.add_argument("--app", action="append", default=["WeChat", "微信"])
     watch.add_argument("--source", default="watch")
@@ -374,6 +446,10 @@ def cmd_capture(args: argparse.Namespace) -> int:
     outcome = _capture_once(args)
     print(outcome.output_line)
     return 0
+
+
+def cmd_quick_capture(args: argparse.Namespace) -> int:
+    return cmd_capture(args)
 
 
 def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
@@ -505,7 +581,7 @@ def cmd_suggest(args: argparse.Namespace) -> int:
     init_db(args.db)
     search_limit = 1000 if args.contact else args.limit
     matched_profiles = _matching_profiles(args.db, args.contact)
-    suggestions = build_suggestions(args.db, limit=search_limit, min_score=args.min_score)
+    suggestions = build_suggestions(args.db, as_of=args.as_of, limit=search_limit, min_score=args.min_score)
     suggestions = _filter_suggestions(
         suggestions,
         args.contact,
@@ -515,6 +591,7 @@ def cmd_suggest(args: argparse.Namespace) -> int:
         args.db,
         args.contact,
         min_score=args.min_score,
+        as_of=args.as_of,
         matched_profiles=matched_profiles,
     ) if not suggestions else None
     markdown = render_markdown(
@@ -539,7 +616,7 @@ def cmd_next(args: argparse.Namespace) -> int:
     init_db(args.db)
     limit = 1000 if args.contact else 1
     matched_profiles = _matching_profiles(args.db, args.contact)
-    suggestions = build_suggestions(args.db, limit=limit, min_score=args.min_score)
+    suggestions = build_suggestions(args.db, as_of=args.as_of, limit=limit, min_score=args.min_score)
     suggestions = _filter_suggestions(
         suggestions,
         args.contact,
@@ -550,6 +627,7 @@ def cmd_next(args: argparse.Namespace) -> int:
             args.db,
             args.contact,
             min_score=args.min_score,
+            as_of=args.as_of,
             matched_profiles=matched_profiles,
         )
         print(
@@ -605,12 +683,13 @@ def cmd_brief(args: argparse.Namespace) -> int:
         print("brief requires a query or --contact.", file=sys.stderr)
         return 2
     profiles = _filter_profiles(build_profiles(args.db), query)
-    suggestions = build_suggestions(args.db, limit=1000, min_score=args.min_score)
+    suggestions = build_suggestions(args.db, as_of=args.as_of, limit=1000, min_score=args.min_score)
     suggestions = _filter_suggestions(suggestions, query, matched_profiles=profiles)
     hidden_suggestion = _best_hidden_suggestion(
         args.db,
         query,
         min_score=args.min_score,
+        as_of=args.as_of,
         matched_profiles=profiles,
     ) if not suggestions else None
     markdown = _render_brief_markdown(
@@ -681,6 +760,102 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         min_score=args.min_score,
     )
     markdown = render_relationship_dashboard_markdown(dashboard)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_import_wechat_archive(args: argparse.Namespace) -> int:
+    if not args.yes and not args.dry_run:
+        raise SystemExit("Use --yes to import WeChat archive sources, or --dry-run to preview.")
+    init_db(args.db)
+    removed = delete_wechat_archive_sources(args.db) if args.yes and args.replace and not args.dry_run else 0
+    known_contacts = _known_contact_names(args.db, extra=args.contact_hint)
+    result = import_wechat_archive_manifest(
+        args.db,
+        manifest_path=args.manifest,
+        known_contacts=known_contacts,
+        dry_run=args.dry_run,
+        imported_at=args.imported_at,
+        limit=args.limit,
+        min_score=args.min_score,
+        include_unmatched=args.include_unmatched and not args.only_matched,
+        include_sensitive=args.include_sensitive,
+    )
+    markdown = render_wechat_archive_import_markdown(result)
+    if removed:
+        markdown = markdown.rstrip() + f"\n\n已替换旧微信归档来源：{removed}\n"
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(markdown, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
+def cmd_cockpit(args: argparse.Namespace) -> int:
+    if not args.yes and not args.dry_run:
+        raise SystemExit("Use --yes to import sources before rendering, or --dry-run to preview.")
+    init_db(args.db)
+    write_imports = args.yes and not args.dry_run
+    removed_archive_sources = (
+        delete_wechat_archive_sources(args.db)
+        if write_imports and args.replace_wechat_archive
+        else 0
+    )
+
+    obsidian_enrichment_result = import_obsidian_enrichments(
+        args.db,
+        vault=args.vault,
+        dry_run=not write_imports,
+        imported_at=args.imported_at,
+    )
+    obsidian_source_result = import_relationship_sources(
+        args.db,
+        paths=[args.vault],
+        kind="obsidian",
+        dry_run=not write_imports,
+        imported_at=args.imported_at,
+    )
+    known_contacts = _known_contact_names(
+        args.db,
+        extra=_vault_contact_names(args.vault),
+    )
+    archive_result = import_wechat_archive_manifest(
+        args.db,
+        manifest_path=args.wechat_manifest,
+        known_contacts=known_contacts,
+        dry_run=not write_imports,
+        imported_at=args.imported_at,
+        limit=args.archive_limit,
+        min_score=args.archive_min_score,
+        include_unmatched=True,
+        include_sensitive=args.include_sensitive,
+    )
+
+    if write_imports:
+        refresh_capture_signals(args.db)
+        refresh_derived_people(args.db)
+
+    dashboard = build_relationship_dashboard(
+        args.db,
+        as_of=args.as_of,
+        limit=args.limit,
+        min_score=args.min_score,
+    )
+    markdown = _render_cockpit_markdown(
+        dashboard,
+        obsidian_enrichment_result=obsidian_enrichment_result,
+        obsidian_source_result=obsidian_source_result,
+        archive_result=archive_result,
+        write_imports=write_imports,
+        removed_archive_sources=removed_archive_sources,
+    )
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(markdown, encoding="utf-8")
@@ -763,7 +938,7 @@ def cmd_feedback_list(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
+    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
     print(render_status_report(report), end="")
     return 0
 
@@ -817,6 +992,22 @@ def cmd_stop_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch_interval(args: argparse.Namespace) -> int:
+    if args.seconds is None:
+        settings = load_settings(args.db)
+    else:
+        try:
+            settings = save_watch_interval(args.db, args.seconds)
+        except ValueError as exc:
+            print(f"watch-interval error: {exc}", file=sys.stderr)
+            return 2
+    print(
+        f"watch_interval_seconds={settings.watch_interval_seconds} "
+        f"settings={_display_settings_path(args.db)}"
+    )
+    return 0
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     if not args.yes and not args.dry_run:
         raise SystemExit("Use --yes to clear database rows and screenshots, or --dry-run to preview.")
@@ -839,19 +1030,20 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     init_db(args.db)
     refresh_capture_signals(args.db)
     refresh_derived_people(args.db)
-    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
+    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
     profiles = build_profiles(args.db, limit=_pre_filter_profile_limit(args.contact, args.limit))
     matched_profiles = _filter_profiles(profiles, args.contact)
     matched_profile_count = len(matched_profiles)
     matched_latest = _format_matching_latest(matched_profiles)
     profiles = _post_filter_limit(matched_profiles, args.contact, args.limit)
     search_limit = 1000 if args.contact else args.limit
-    suggestions = build_suggestions(args.db, limit=search_limit, min_score=args.min_score)
+    suggestions = build_suggestions(args.db, as_of=args.as_of, limit=search_limit, min_score=args.min_score)
     suggestions = _filter_suggestions(suggestions, args.contact, matched_profiles=matched_profiles)[: args.limit]
     hidden_suggestion = _best_hidden_suggestion(
         args.db,
         args.contact,
         min_score=args.min_score,
+        as_of=args.as_of,
         matched_profiles=matched_profiles,
     ) if not suggestions else None
 
@@ -923,7 +1115,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
     profiles = build_profiles(args.db)
     filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
     enrichments = enrichment_by_person(args.db)
-    all_suggestions = build_suggestions(args.db, limit=1000, min_score=0)
+    all_suggestions = build_suggestions(args.db, as_of=args.as_of, limit=1000, min_score=0)
     suggestions_by_person = _suggestions_by_person(all_suggestions)
     written_contacts = []
     for profile in profiles:
@@ -941,7 +1133,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
             ),
         )
         written_contacts.append(path)
-    followups = build_suggestions(args.db, limit=args.limit, min_score=args.min_score)
+    followups = build_suggestions(args.db, as_of=args.as_of, limit=args.limit, min_score=args.min_score)
     people_index_path = people_dir / "索引.md"
     _write_text(
         people_index_path,
@@ -956,6 +1148,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
         args.db,
         log_file=Path(args.db).parent / "watch.log",
         captures_dir=Path(args.db).parent / "captures",
+        as_of=args.as_of,
     )
     report_path = reports_dir / f"{report_date}.md"
     _write_text(
@@ -1050,8 +1243,8 @@ def cmd_weekly_report(args: argparse.Namespace) -> int:
     refresh_derived_people(args.db)
     report_date = _obsidian_report_date(args.date)
     profiles = build_profiles(args.db)
-    followups = build_suggestions(args.db, limit=args.limit, min_score=args.min_score)
-    status_report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir)
+    followups = build_suggestions(args.db, as_of=args.as_of, limit=args.limit, min_score=args.min_score)
+    status_report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
     filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
     markdown = _render_obsidian_weekly_report(
         report_date,
@@ -1069,6 +1262,72 @@ def cmd_weekly_report(args: argparse.Namespace) -> int:
     else:
         print(markdown, end="")
     return 0
+
+
+def _known_contact_names(args_db: Path, *, extra=()) -> list[str]:
+    init_db(args_db)
+    names = {profile.name for profile in build_profiles(args_db)}
+    names.update(record.person_name for record in list_contact_enrichments(args_db, limit=10000))
+    names.update(str(item).strip() for item in extra if str(item).strip())
+    return sorted(names)
+
+
+def _vault_contact_names(vault: Path) -> list[str]:
+    people_dir = Path(vault) / "社交圈" / "人脉"
+    if not people_dir.exists():
+        return []
+    return sorted(path.stem for path in people_dir.glob("*.md") if path.stem != "索引")
+
+
+def _render_cockpit_markdown(
+    dashboard,
+    *,
+    obsidian_enrichment_result,
+    obsidian_source_result,
+    archive_result,
+    write_imports: bool,
+    removed_archive_sources: int = 0,
+) -> str:
+    mode = "已导入并刷新" if write_imports else "预览模式，未写入新来源"
+    lines = [
+        "# 关系跟进驾驶舱",
+        "",
+        f"- 模式：{mode}",
+        f"- 联系人补充扫描：{obsidian_enrichment_result.scanned_count}",
+        f"- 联系人补充导入：{obsidian_enrichment_result.imported_count}",
+        f"- 联系人来源解析：{obsidian_source_result.parsed_count}",
+        f"- 联系人来源导入：{obsidian_source_result.imported_count}",
+        f"- 微信归档文件清单扫描：{archive_result.scanned_count}",
+        f"- 微信归档文件线索选中：{archive_result.parsed_count}",
+        f"- 微信归档文件线索导入：{archive_result.imported_count}",
+        f"- 微信归档文件线索重复：{archive_result.duplicate_count}",
+        f"- 微信归档文件线索替换旧记录：{removed_archive_sources}",
+        f"- 微信归档文件线索跳过高敏感：{archive_result.skipped_sensitive_count}",
+        "",
+        "## 微信归档文件线索分桶",
+        "",
+    ]
+    if archive_result.by_bucket:
+        for name, count in sorted(archive_result.by_bucket.items(), key=lambda item: (-item[1], item[0]))[:12]:
+            lines.append(f"- {name}: {count}")
+    else:
+        lines.append("- 暂无。")
+    lines.extend(["", "## 今日操作视图", ""])
+    rendered_dashboard = render_relationship_dashboard_markdown(dashboard).strip()
+    lines.append(rendered_dashboard)
+    lines.extend(
+        [
+            "",
+            "## 使用原则",
+            "",
+            "- 只给建议和草稿，不自动发送微信消息。",
+            "- 微信归档部分目前只导入文件清单元数据，不代表已导入聊天记录。",
+            "- 微信归档文件线索默认跳过高敏感文件名，例如合同、简历、发票、股权、薪酬等。",
+            "- 联系人资料来自本地 Hbrain/社交圈，不写回原始微信归档。",
+            "- 如果某条建议不合适，用 `wsa feedback` 标记，后续会降低类似提醒。",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _suggestions_by_person(suggestions) -> dict[str, object]:
@@ -1682,10 +1941,10 @@ def _matching_profiles(db_path: Path, query: str | None):
     return _filter_profiles(build_profiles(db_path), query)
 
 
-def _best_hidden_suggestion(db_path: Path, query: str | None, *, min_score: int, matched_profiles=None):
+def _best_hidden_suggestion(db_path: Path, query: str | None, *, min_score: int, as_of: str | None = None, matched_profiles=None):
     if min_score <= 0:
         return None
-    suggestions = build_suggestions(db_path, limit=1000, min_score=0)
+    suggestions = build_suggestions(db_path, as_of=as_of, limit=1000, min_score=0)
     suggestions = _filter_suggestions(suggestions, query, matched_profiles=matched_profiles)
     hidden = [suggestion for suggestion in suggestions if suggestion.score < min_score]
     return hidden[0] if hidden else None
@@ -1987,7 +2246,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         else:
             detail = f"{status.detail} via {status.method}" if not app_name else f"not target app via {status.method}"
             _log_watch(args, "skip", detail, app_name=app_name or "unknown", state=log_state)
-        time.sleep(max(5, args.interval))
+        time.sleep(max(5, _watch_interval(args)))
 
 
 def _read_text(args: argparse.Namespace) -> str:
@@ -2008,6 +2267,19 @@ def _remove_duplicate_image(image_path: Path) -> bool:
     except FileNotFoundError:
         return False
     return True
+
+
+def _display_settings_path(db_path: Path) -> str:
+    path = settings_path_for_db(db_path)
+    if Path(db_path).parent.name == "data":
+        return str(Path("data") / path.name)
+    return str(path)
+
+
+def _watch_interval(args: argparse.Namespace) -> int:
+    if args.interval is not None:
+        return args.interval
+    return load_settings(args.db).watch_interval_seconds
 
 
 def _log_watch(

@@ -3,9 +3,13 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wsa.cli import build_parser, main
 from wsa.store import connect, ingest_capture, init_db
+
+
+AS_OF = "2026-05-28T12:00:00+08:00"
 
 
 class AnalyzeCommandTests(unittest.TestCase):
@@ -54,7 +58,7 @@ class AnalyzeCommandTests(unittest.TestCase):
                 conn.commit()
 
             stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            with patch("wsa.status._process_rows", return_value=[]), contextlib.redirect_stdout(stdout):
                 exit_code = main(
                     [
                         "--db",
@@ -64,6 +68,8 @@ class AnalyzeCommandTests(unittest.TestCase):
                         str(profiles_out),
                         "--suggestions-out",
                         str(suggestions_out),
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 
@@ -145,6 +151,8 @@ class AnalyzeCommandTests(unittest.TestCase):
                         str(profiles_out),
                         "--suggestions-out",
                         str(suggestions_out),
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 
@@ -201,6 +209,8 @@ class AnalyzeCommandTests(unittest.TestCase):
                         str(profiles_out),
                         "--suggestions-out",
                         str(suggestions_out),
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 
@@ -242,6 +252,8 @@ class AnalyzeCommandTests(unittest.TestCase):
                         str(profiles_out),
                         "--suggestions-out",
                         str(suggestions_out),
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 
@@ -289,6 +301,8 @@ class AnalyzeCommandTests(unittest.TestCase):
                         str(profiles_out),
                         "--suggestions-out",
                         str(suggestions_out),
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 

@@ -8,7 +8,12 @@ from wsa.cli import main
 from wsa.store import ingest_capture, init_db
 
 
+AS_OF = "2026-05-28T12:00:00+08:00"
+
+
 def run_cli(argv: list[str]) -> tuple[int, str]:
+    if "brief" in argv and "--as-of" not in argv:
+        argv = [*argv, "--as-of", AS_OF]
     stdout = io.StringIO()
     stderr = io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):

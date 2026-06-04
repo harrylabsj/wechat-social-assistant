@@ -8,6 +8,9 @@ from wsa.cli import main
 from wsa.store import ingest_capture, init_db
 
 
+AS_OF = "2026-05-28T12:00:00+08:00"
+
+
 class ObsidianExportCommandTests(unittest.TestCase):
     def test_obsidian_export_writes_contact_files_and_daily_report(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -46,6 +49,8 @@ class ObsidianExportCommandTests(unittest.TestCase):
                         str(vault),
                         "--date",
                         "2026-05-27",
+                        "--as-of",
+                        AS_OF,
                     ]
                 )
 

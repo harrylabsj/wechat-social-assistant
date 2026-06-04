@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 from .candidates import RelationshipCandidate, discover_relationship_candidates
@@ -16,6 +17,17 @@ from .timefmt import format_display_time
 
 
 COMMITMENT_ACTIONS = {"补回复", "确认时间", "项目跟进", "回答问题"}
+NOISE_NAMES = {
+    "时间",
+    "来源",
+    "项目",
+    "方案",
+    "合作",
+    "会议",
+    "报告",
+    "计划",
+    "有效期",
+}
 
 
 @dataclass(frozen=True)
@@ -113,7 +125,14 @@ def dashboard_to_dict(dashboard: RelationshipDashboard) -> dict[str, Any]:
 
 
 def _priority_followups(suggestions: list[Suggestion], *, limit: int) -> list[DashboardEntry]:
-    return [_entry_from_suggestion(suggestion) for suggestion in suggestions[:limit]]
+    entries = []
+    for suggestion in suggestions:
+        if _is_noise_name(suggestion.person_name):
+            continue
+        entries.append(_entry_from_suggestion(suggestion))
+        if len(entries) >= limit:
+            break
+    return entries
 
 
 def _analysis_time(as_of: str | None) -> str:
@@ -139,6 +158,7 @@ def _cooling_contacts(cards: list[RelationshipQualityCard], *, limit: int) -> li
         )
         for card in cards
         if card.kind != "group"
+        and not _is_noise_name(card.name)
         and (card.recency.score <= 35 or card.next_action.action == "恢复联系")
     ]
     entries.sort(key=lambda item: (item.score, item.name))
@@ -158,6 +178,7 @@ def _candidate_opportunities(candidates: list[RelationshipCandidate], *, limit: 
             evidence_at=candidate.evidence_captured_at,
         )
         for candidate in candidates[:limit]
+        if not _is_noise_name(candidate.name)
     ]
 
 
@@ -165,6 +186,7 @@ def _open_commitments(suggestions: list[Suggestion], *, limit: int) -> list[Dash
     commitments = [
         _entry_from_suggestion(suggestion)
         for suggestion in suggestions
+        if not _is_noise_name(suggestion.person_name)
         if suggestion.action in COMMITMENT_ACTIONS
     ]
     return commitments[:limit]
@@ -240,6 +262,8 @@ def _noisy_groups(
 def _source_updates(sources: list[RelationshipSource], *, limit: int) -> list[DashboardEntry]:
     latest_by_person: dict[str, RelationshipSource] = {}
     for source in sources:
+        if _is_noise_name(source.person_name):
+            continue
         latest_by_person.setdefault(source.person_name, source)
     entries = [
         DashboardEntry(
@@ -288,6 +312,23 @@ def _entry_from_suggestion(suggestion: Suggestion) -> DashboardEntry:
         source=", ".join(suggestion.source_chats),
         evidence_at=suggestion.evidence_captured_at or suggestion.last_interaction_at,
     )
+
+
+def _is_noise_name(value: str) -> bool:
+    cleaned = str(value).strip()
+    if not cleaned:
+        return True
+    if cleaned in NOISE_NAMES:
+        return True
+    if re.fullmatch(r"[+\-\d.\s]+", cleaned):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?元", cleaned):
+        return True
+    if re.fullmatch(r"\d+条新消息", cleaned):
+        return True
+    if re.search(r"(积分|ChatGPT|GPT|Pro[〉>])", cleaned, flags=re.IGNORECASE):
+        return True
+    return False
 
 
 def _section(title: str, entries: tuple[DashboardEntry, ...], empty_message: str) -> list[str]:

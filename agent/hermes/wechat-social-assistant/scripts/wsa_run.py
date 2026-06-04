@@ -15,6 +15,7 @@ READ_COMMANDS = {
     "brief",
     "quality",
     "dashboard",
+    "cockpit",
     "candidates",
     "sources",
     "weekly-report",
@@ -27,17 +28,20 @@ WRITE_COMMANDS = {
     "init",
     "ingest",
     "capture",
+    "quick-capture",
     "import-image",
     "ingest-image",
     "analyze",
     "export-obsidian",
     "import-obsidian",
     "import-source",
+    "import-wechat-archive",
     "feedback",
     "candidate-confirm",
     "export-data",
     "delete-contact",
     "watch",
+    "watch-interval",
     "stop-watch",
     "stop",
     "reset",
@@ -71,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _requires_confirmation(command: str, args: list[str]) -> bool:
     if command in WRITE_COMMANDS:
+        return True
+    if command == "cockpit" and ("--dry-run" not in args[1:] or "--out" in args[1:]):
         return True
     return command == "candidates" and "--sync" in args[1:]
 

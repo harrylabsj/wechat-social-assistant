@@ -8,6 +8,9 @@ from wsa.cli import main
 from wsa.store import ingest_capture, init_db
 
 
+AS_OF = "2026-05-28T12:00:00+08:00"
+
+
 class SuggestCommandTests(unittest.TestCase):
     def test_suggest_default_filters_recent_low_priority_contacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -30,7 +33,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest"])
+                exit_code = main(["--db", str(db_path), "suggest", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -51,7 +54,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--min-score", "0"])
+                exit_code = main(["--db", str(db_path), "suggest", "--min-score", "0", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -82,7 +85,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -119,7 +122,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -151,7 +154,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--contact", "项目交流"])
+                exit_code = main(["--db", str(db_path), "suggest", "--contact", "项目交流", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -181,7 +184,7 @@ class SuggestCommandTests(unittest.TestCase):
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 exit_code = main(
-                    ["--db", str(db_path), "suggest", "--contact", "示例资本", "--min-score", "0"]
+                    ["--db", str(db_path), "suggest", "--contact", "示例资本", "--min-score", "0", "--as-of", AS_OF]
                 )
 
         output = stdout.getvalue()
@@ -203,7 +206,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "suggest", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -224,7 +227,7 @@ class SuggestCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "suggest", "--contact", "李四"])
+                exit_code = main(["--db", str(db_path), "suggest", "--contact", "李四", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)

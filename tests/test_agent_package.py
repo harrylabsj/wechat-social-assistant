@@ -64,12 +64,14 @@ class AgentPackageTests(unittest.TestCase):
                 "brief",
                 "quality",
                 "dashboard",
+                "cockpit",
                 "candidates",
                 "candidate-confirm",
                 "weekly-report",
                 "import-obsidian",
                 "sources",
                 "import-source",
+                "import-wechat-archive",
                 "feedback",
                 "feedback-list",
                 "next",
@@ -77,6 +79,8 @@ class AgentPackageTests(unittest.TestCase):
                 "analyze",
                 "export-obsidian",
                 "import-image",
+                "quick-capture",
+                "watch-interval",
                 "watch",
                 "stop-watch",
             },
@@ -145,20 +149,39 @@ class AgentPackageTests(unittest.TestCase):
         self.assertIn("delete-contact", runner_result.stdout)
         self.assertIn("quality", runner_result.stdout)
         self.assertIn("dashboard", runner_result.stdout)
+        self.assertIn("cockpit", runner_result.stdout)
         self.assertIn("candidates", runner_result.stdout)
         self.assertIn("candidate-confirm", runner_result.stdout)
         self.assertIn("weekly-report", runner_result.stdout)
         self.assertIn("import-obsidian", runner_result.stdout)
         self.assertIn("sources", runner_result.stdout)
         self.assertIn("import-source", runner_result.stdout)
+        self.assertIn("import-wechat-archive", runner_result.stdout)
         self.assertIn("feedback", runner_result.stdout)
         self.assertIn("feedback-list", runner_result.stdout)
         self.assertIn("export-obsidian", runner_result.stdout)
+        self.assertIn("quick-capture", runner_result.stdout)
+        self.assertIn("watch-interval", runner_result.stdout)
 
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("wechat-social-assistant", installer_text)
         self.assertNotIn(PRIVATE_HOME, installer_text)
         self.assertNotIn(PRIVATE_VAULT, installer_text)
+
+    def test_macos_shortcut_scripts_are_portable(self):
+        scripts = {
+            "quick": ROOT / "tools" / "wsa-quick-capture.command",
+            "interval": ROOT / "tools" / "wsa-set-interval.command",
+        }
+
+        for script in scripts.values():
+            self.assertTrue(script.exists(), f"missing {script}")
+            text = script.read_text(encoding="utf-8")
+            self.assertIn("python3 -m wsa.cli", text)
+            self.assertNotIn(PRIVATE_HOME, text)
+            self.assertNotIn(PRIVATE_VAULT, text)
+        self.assertIn("quick-capture", scripts["quick"].read_text(encoding="utf-8"))
+        self.assertIn("watch-interval", scripts["interval"].read_text(encoding="utf-8"))
 
     def test_references_and_openclaw_non_plugin_guide_exist(self):
         expected_paths = [

@@ -12,6 +12,9 @@ from wsa.status import (
 from wsa.store import connect, ingest_capture, init_db
 
 
+AS_OF = "2026-05-28T12:00:00+08:00"
+
+
 class StatusCommandTests(unittest.TestCase):
     def test_status_parser_defaults_log_file_next_to_database(self):
         parser = build_parser()
@@ -55,7 +58,7 @@ class StatusCommandTests(unittest.TestCase):
                 conn.execute("delete from capture_signals")
                 conn.commit()
 
-            report = build_status_report(db_path, log_file=log_file, captures_dir=captures_dir)
+            report = build_status_report(db_path, log_file=log_file, captures_dir=captures_dir, as_of=AS_OF)
             rendered = render_status_report(report)
 
         self.assertEqual(1, report.capture_count)
@@ -138,7 +141,7 @@ class StatusCommandTests(unittest.TestCase):
                 captured_at="2026-05-26T22:21:31+08:00",
             )
 
-            report = build_status_report(db_path, process_rows=[])
+            report = build_status_report(db_path, process_rows=[], as_of=AS_OF)
             rendered = render_status_report(report)
 
         self.assertIn("quality: 采集样本较少（1 条），画像可能不完整", rendered)
@@ -157,7 +160,7 @@ class StatusCommandTests(unittest.TestCase):
                 captured_at="2026-05-26T22:21:31+08:00",
             )
 
-            report = build_status_report(db_path, process_rows=[])
+            report = build_status_report(db_path, process_rows=[], as_of=AS_OF)
             rendered = render_status_report(report)
 
         self.assertIn(

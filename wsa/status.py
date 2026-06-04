@@ -47,6 +47,7 @@ def build_status_report(
     log_file: Path | str | None = None,
     captures_dir: Path | str | None = None,
     process_rows: list[str] | None = None,
+    as_of: str | None = None,
 ) -> StatusReport:
     db = Path(db_path)
     log = Path(log_file) if log_file is not None else db.parent / "watch.log"
@@ -81,7 +82,7 @@ def build_status_report(
                 latest_source = latest["source"]
                 latest_image_path = latest["image_path"]
             profile_count = len(build_profiles(db))
-            top_followup = _top_followup_summary(db)
+            top_followup = _top_followup_summary(db, as_of=as_of)
 
     return StatusReport(
         db_path=db,
@@ -161,11 +162,11 @@ def _count_current_signals(conn) -> int:
     return sum(len(extract_signals(row["clean_text"])) for row in rows)
 
 
-def _top_followup_summary(db: Path) -> str | None:
+def _top_followup_summary(db: Path, *, as_of: str | None = None) -> str | None:
     min_score = 45
-    suggestions = build_suggestions(db, limit=1, min_score=min_score)
+    suggestions = build_suggestions(db, as_of=as_of, limit=1, min_score=min_score)
     if not suggestions:
-        hidden_suggestions = build_suggestions(db, limit=1, min_score=0)
+        hidden_suggestions = build_suggestions(db, as_of=as_of, limit=1, min_score=0)
         if not hidden_suggestions:
             return None
         top = hidden_suggestions[0]

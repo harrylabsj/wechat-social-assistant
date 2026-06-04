@@ -17,7 +17,7 @@ from .store import connect, init_db, now_iso
 from .timefmt import format_display_time
 
 
-SOURCE_TYPES = ("contacts", "calendar", "meeting", "obsidian", "email")
+SOURCE_TYPES = ("contacts", "calendar", "meeting", "obsidian", "email", "wechat_archive")
 
 
 @dataclass(frozen=True)

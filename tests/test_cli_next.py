@@ -8,6 +8,9 @@ from wsa.cli import main
 from wsa.store import ingest_capture, init_db
 
 
+AS_OF = "2026-05-28T12:00:00+08:00"
+
+
 class NextCommandTests(unittest.TestCase):
     def test_next_prints_top_followup_with_full_draft(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -28,7 +31,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next"])
+                exit_code = main(["--db", str(db_path), "next", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -61,7 +64,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--draft-only"])
+                exit_code = main(["--db", str(db_path), "next", "--draft-only", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -97,7 +100,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -137,7 +140,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -169,7 +172,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "项目交流"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "项目交流", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -200,7 +203,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "李四"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "李四", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -240,7 +243,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -269,7 +272,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--draft-only"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--draft-only", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -295,7 +298,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "项目交流群3"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "项目交流群3", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -324,7 +327,7 @@ class NextCommandTests(unittest.TestCase):
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 exit_code = main(
-                    ["--db", str(db_path), "next", "--contact", "示例资本", "--min-score", "0"]
+                    ["--db", str(db_path), "next", "--contact", "示例资本", "--min-score", "0", "--as-of", AS_OF]
                 )
 
         output = stdout.getvalue()
@@ -347,7 +350,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next"])
+                exit_code = main(["--db", str(db_path), "next", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -370,7 +373,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "李四"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "李四", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
@@ -393,7 +396,7 @@ class NextCommandTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
-                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A"])
+                exit_code = main(["--db", str(db_path), "next", "--contact", "群成员A", "--as-of", AS_OF])
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)

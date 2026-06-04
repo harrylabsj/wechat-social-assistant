@@ -9,6 +9,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa contacts --query NAME` - find known contacts, groups, speakers, organizations, and identity hints.
 - `wsa brief NAME` - summarize one contact or matching set of contacts.
 - `wsa dashboard` - render the daily relationship operating dashboard.
+- `wsa cockpit --dry-run` - preview the full relationship cockpit using current DB plus safe source previews.
 - `wsa quality --contact NAME` - render evidence-backed relationship quality, risks, gaps, and next actions.
 - `wsa candidates --min-confidence 45` - discover group/event relationship candidates without writing by default.
 - `wsa sources --contact NAME` - list locally imported relationship sources for a contact.
@@ -34,9 +35,13 @@ The v1.0 MCP server exposes read tools: `get_status`, `get_audit_report`, `searc
 - `wsa import-image PATH --contact NAME` - OCRs screenshots and stores evidence.
 - `wsa import-obsidian --vault PATH --yes` - imports manual enrichment edited in Obsidian contact notes.
 - `wsa import-source PATH --yes` - imports user-provided local contacts, calendar files, meeting notes, Obsidian notes, or email files.
+- `wsa import-wechat-archive --yes` - imports selected WeChat archive manifest metadata as local relationship sources.
+- `wsa cockpit --yes` - imports contact notes and WeChat archive metadata, refreshes derived data, and writes the cockpit report.
 - `wsa export-data --out PATH --yes` - writes a local JSON data export.
 - `wsa delete-contact NAME --dry-run` then `--yes` - previews or deletes one contact's local records.
 - `wsa capture --contact NAME` - captures the screen or a selected window.
+- `wsa quick-capture` - immediately captures the current screen with shortcut-friendly defaults.
+- `wsa watch-interval 10` - saves the default polling interval for future `wsa watch` runs that omit `--interval`.
 - `wsa watch --interval 60` - starts explicit foreground WeChat polling.
 - `wsa stop-watch` - stops matching local watch processes.
 - `wsa analyze` - refreshes derived data and writes report files.

@@ -116,6 +116,20 @@ python3 -m wsa.cli dashboard --min-score 0 --limit 12
 
 `dashboard` 会把日常操作视图压成一个页面：优先联系、降温关系、新人机会、待处理承诺、高价值群聊、噪音群聊和最新来源线索。它复用关系质量、跟进建议、人脉候选人和多入口来源，不自动发送消息，只给出下一步动作和草稿。
 
+把联系人资料、微信归档和本地记忆合成“关系跟进驾驶舱”：
+
+```bash
+python3 -m wsa.cli cockpit --dry-run
+python3 -m wsa.cli cockpit \
+  --vault "$HOME/Hbrain" \
+  --wechat-manifest "$HOME/Library/Mobile Documents/com~apple~CloudDocs/微信归档/聊天文件-全量-2026-05-11/manifest-all.tsv" \
+  --out reports/relationship-cockpit.md \
+  --yes --replace-wechat-archive \
+  --min-score 0
+```
+
+`cockpit` 会先导入 Hbrain/Obsidian 联系人资料，再按文件名和路径安全扫描微信归档 manifest，把高价值文件线索写入本地 `relationship_sources`，刷新关系信号和联系人档案，最后输出 `reports/relationship-cockpit.md`。这一部分不是聊天记录导入；它只读取归档清单里的文件元数据，不读取微信私有数据库、不解析聊天数据库、不自动发送消息。默认会跳过简历、合同、发票、身份证等高敏感文件名，只有显式加 `--include-sensitive` 才纳入。
+
 发现群聊/活动里值得认识的人：
 
 ```bash
@@ -251,12 +265,14 @@ python3 -m wsa.cli analyze --min-score 0
 - `.md` / `.txt` 会议记录：标题、日期、参会人和摘要。
 - Obsidian Vault 的 `社交圈/人脉/*.md`：手工补充的人脉线索。
 - `.eml` 邮件：发件人、收件人、主题、日期和正文摘要。
+- 微信归档 manifest：只读取 `manifest-all.tsv` 的文件元数据，作为项目/联系人关系线索；这不是聊天记录导入。
 
 导入前先 dry-run：
 
 ```bash
 python3 -m wsa.cli import-source ./contacts.vcf --dry-run
 python3 -m wsa.cli import-source ./calendar.ics ./meeting.md --dry-run
+python3 -m wsa.cli import-wechat-archive --dry-run
 ```
 
 确认后写入本地数据库：
@@ -264,6 +280,7 @@ python3 -m wsa.cli import-source ./calendar.ics ./meeting.md --dry-run
 ```bash
 python3 -m wsa.cli import-source ./contacts.vcf --yes
 python3 -m wsa.cli import-source "$HOME/Documents/Obsidian Vault" --kind obsidian --yes
+python3 -m wsa.cli import-wechat-archive --yes --replace
 ```
 
 查看已经导入的来源：
@@ -331,6 +348,32 @@ python3 -m wsa.cli capture --contact 张三 --mode window
 截图采集完成后，命令行也会回显 `contact=... person=... signals=... image=...`，其中 `signals` 使用中文关系信号，没有信号时显示 `signals=无`，方便马上判断 OCR 入库是否有效。
 如果 OCR 文本和已有记录重复，`capture/watch` 会显示 `duplicate`；系统会把这次解析出的关系信号补回既有记录，避免旧库漏掉线索。已有记录缺少截图时会把新图片补挂上去并输出 `image_attached=...`，同时把该记录的证据时间、来源和联系人最近出现时间更新为这次截图；已有记录已经有可用截图时才删除这次刚截的新图片并输出 `duplicate_image_removed=...`，避免截图目录被重复画面撑大。
 
+如果想用快捷键随时手动补采一次当前微信画面，可以用更适合快捷方式绑定的命令：
+
+```bash
+python3 -m wsa.cli quick-capture
+```
+
+`quick-capture` 默认使用 `--mode screen --crop-preset wechat-chat --source hotkey`，等价于“马上抓当前屏幕右侧微信聊天区域并入库”。也可以显式传 `--contact NAME`。
+
+扫描间隔可以保存成默认设置：
+
+```bash
+python3 -m wsa.cli watch-interval
+python3 -m wsa.cli watch-interval 10
+```
+
+设置会写到 `data/settings.json`。`watch` 如果没有显式传 `--interval`，每轮都会读取这个保存值；用快捷方式改完后，下一轮轮询就会使用新间隔。已经用 `--interval` 启动的进程会以命令行参数为准，需要重启后才会改用默认设置。
+
+macOS 下可以把项目里的两个脚本绑定成全局快捷键：
+
+```text
+tools/wsa-quick-capture.command
+tools/wsa-set-interval.command
+```
+
+在“快捷指令”App 里新建快捷指令，动作选择“运行 Shell 脚本”，脚本内容填上对应 `.command` 文件路径，然后在信息面板里添加键盘快捷键。建议 `Option+Command+W` 用于快捷采集，`Option+Command+I` 用于弹窗设置扫描间隔。
+
 也可以先自己截图，再 OCR：
 
 ```bash
@@ -362,10 +405,10 @@ python3 -m wsa.cli import-image ./phone-screenshots --contact 张三
 如果你希望它在一段时间内自动记录当前前台微信窗口：
 
 ```bash
-python3 -m wsa.cli watch --interval 60 --mode screen
+python3 -m wsa.cli watch --mode screen
 ```
 
-这会每 60 秒检查一次前台应用。只有当前台应用名是 `WeChat` 或 `微信` 时才截图、OCR、入库。前台运行时按 `Ctrl-C` 停止。
+这会按 `watch-interval` 保存的间隔检查一次前台应用，默认是 60 秒。只有当前台应用名是 `WeChat` 或 `微信` 时才截图、OCR、入库。前台运行时按 `Ctrl-C` 停止；也可以临时用 `--interval 10` 覆盖本次运行。
 
 如果 `watch` 在后台运行，可以先预览将要停止的进程，再停止：
 

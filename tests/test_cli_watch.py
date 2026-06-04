@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wsa.cli import WatchLogState, _append_watch_log, _should_emit_watch_log, _watch_log_line, build_parser, cmd_watch, main
+from wsa.settings import save_watch_interval
 
 
 class WatchLogTests(unittest.TestCase):
@@ -21,6 +22,71 @@ class WatchLogTests(unittest.TestCase):
         )
 
         self.assertEqual(Path("/tmp/wsa-test/watch.log"), args.log_file)
+
+    def test_watch_uses_saved_interval_when_not_provided(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            log_file = root / "data" / "watch.log"
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["--db", str(db_path), "watch-interval", "12"])
+            args = build_parser().parse_args(
+                [
+                    "--db",
+                    str(db_path),
+                    "watch",
+                    "--log-file",
+                    str(log_file),
+                ]
+            )
+
+            with (
+                patch(
+                    "wsa.cli.frontmost_app_status",
+                    return_value=SimpleNamespace(name="Finder", method="swift", detail="not target app"),
+                ),
+                patch("wsa.cli.time.sleep", side_effect=KeyboardInterrupt) as sleep,
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                cmd_watch(args)
+
+        sleep.assert_called_once_with(12)
+
+    def test_watch_reloads_saved_interval_between_polls(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            log_file = root / "data" / "watch.log"
+            save_watch_interval(db_path, 12)
+            args = build_parser().parse_args(
+                [
+                    "--db",
+                    str(db_path),
+                    "watch",
+                    "--log-file",
+                    str(log_file),
+                ]
+            )
+            slept: list[int] = []
+
+            def fake_sleep(seconds):
+                slept.append(seconds)
+                if len(slept) == 1:
+                    save_watch_interval(db_path, 9)
+                    return None
+                raise KeyboardInterrupt
+
+            with (
+                patch(
+                    "wsa.cli.frontmost_app_status",
+                    return_value=SimpleNamespace(name="Finder", method="swift", detail="not target app"),
+                ),
+                patch("wsa.cli.time.sleep", side_effect=fake_sleep),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                cmd_watch(args)
+
+        self.assertEqual([12, 9], slept)
 
     def test_stop_watch_parser_supports_dry_run_alias(self):
         parser = build_parser()
