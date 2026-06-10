@@ -44,6 +44,7 @@ class DeleteContactResult:
     removed_candidates: int
     removed_enrichments: int
     removed_sources: int
+    removed_screenshots: int
     dry_run: bool = False
 
 
@@ -123,6 +124,9 @@ def delete_contact_data(
         if not dry_run:
             _delete_contact_rows(conn, name, impact["person_ids"], impact["capture_ids"])
             conn.commit()
+    if not dry_run:
+        for path in impact["screenshot_paths"]:
+            path.unlink(missing_ok=True)
     return DeleteContactResult(
         person_name=name,
         removed_people=impact["people"],
@@ -132,6 +136,7 @@ def delete_contact_data(
         removed_candidates=impact["candidates"],
         removed_enrichments=impact["enrichments"],
         removed_sources=impact["sources"],
+        removed_screenshots=len(impact["screenshot_paths"]),
         dry_run=dry_run,
     )
 
@@ -146,6 +151,7 @@ def delete_result_to_dict(result: DeleteContactResult) -> dict[str, Any]:
         "removed_candidates": result.removed_candidates,
         "removed_enrichments": result.removed_enrichments,
         "removed_sources": result.removed_sources,
+        "removed_screenshots": result.removed_screenshots,
         "dry_run": result.dry_run,
     }
 
@@ -164,9 +170,11 @@ def _table_rows(conn, table: str) -> list[dict[str, Any]]:
 def _delete_contact_impact(conn, name: str) -> dict[str, Any]:
     person_ids = [int(row["id"]) for row in conn.execute("select id from people where name = ?", (name,)).fetchall()]
     capture_ids = _capture_ids(conn, person_ids)
+    screenshot_paths = _unshared_capture_image_paths(conn, capture_ids)
     return {
         "person_ids": person_ids,
         "capture_ids": capture_ids,
+        "screenshot_paths": screenshot_paths,
         "people": len(person_ids),
         "captures": len(capture_ids),
         "signals": _count_by_ids(conn, "capture_signals", "capture_id", capture_ids),
@@ -198,6 +206,40 @@ def _capture_ids(conn, person_ids: list[int]) -> list[int]:
             person_ids,
         ).fetchall()
     ]
+
+
+def _unshared_capture_image_paths(conn, capture_ids: list[int]) -> list[Path]:
+    if not capture_ids:
+        return []
+    placeholders = ", ".join("?" for _ in capture_ids)
+    rows = conn.execute(
+        f"""
+        select distinct image_path
+        from captures
+        where id in ({placeholders})
+          and image_path is not null
+          and image_path != ''
+        """,
+        capture_ids,
+    ).fetchall()
+    result: list[Path] = []
+    for row in rows:
+        image_path = str(row["image_path"])
+        other_refs = int(
+            conn.execute(
+                f"""
+                select count(*)
+                from captures
+                where image_path = ?
+                  and id not in ({placeholders})
+                """,
+                [image_path, *capture_ids],
+            ).fetchone()[0]
+        )
+        path = Path(image_path)
+        if other_refs == 0 and path.is_file():
+            result.append(path)
+    return result
 
 
 def _count_by_ids(conn, table: str, column: str, ids: list[int]) -> int:

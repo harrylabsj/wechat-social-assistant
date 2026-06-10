@@ -28,9 +28,12 @@ class AuditAndDataControlTests(unittest.TestCase):
             payload = json.loads(export_path.read_text(encoding="utf-8"))
             dry_run = delete_contact_data(db_path, "张三", dry_run=True)
             before_delete_sources = list_relationship_sources(db_path, person_name="张三")
+            screenshot = root / "data" / "captures" / "zhangsan.png"
+            screenshot_exists_after_dry_run = screenshot.exists()
             delete_result = delete_contact_data(db_path, "张三")
             after_delete_sources = list_relationship_sources(db_path, person_name="张三")
             after_audit = build_audit_report(db_path)
+            screenshot_exists_after_delete = screenshot.exists()
 
         self.assertEqual(1, audit.table_counts["captures"])
         self.assertEqual(1, audit.table_counts["relationship_sources"])
@@ -40,23 +43,63 @@ class AuditAndDataControlTests(unittest.TestCase):
         self.assertIn("people", payload["tables"])
         self.assertEqual("张三", payload["tables"]["people"][0]["name"])
         self.assertEqual(1, dry_run.removed_captures)
+        self.assertEqual(1, dry_run.removed_screenshots)
+        self.assertTrue(screenshot_exists_after_dry_run)
         self.assertEqual(1, len(before_delete_sources))
         self.assertTrue(dry_run.dry_run)
         self.assertEqual(1, delete_result.removed_people)
         self.assertEqual(1, delete_result.removed_sources)
+        self.assertEqual(1, delete_result.removed_screenshots)
+        self.assertFalse(screenshot_exists_after_delete)
         self.assertEqual([], after_delete_sources)
         self.assertEqual(0, after_audit.table_counts["people"])
         self.assertEqual(0, after_audit.table_counts["captures"])
 
+    def test_delete_contact_keeps_screenshot_still_referenced_by_another_capture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            image = root / "shared.png"
+            image.write_bytes(b"shared image")
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="张三\n下周方便聊聊这个项目吗？",
+                contact_hint="张三",
+                source="image",
+                captured_at="2026-05-27T09:00:00+08:00",
+                image_path=str(image),
+            )
+            ingest_capture(
+                db_path,
+                raw_text="李四\n下周方便聊聊这个项目吗？",
+                contact_hint="李四",
+                source="image",
+                captured_at="2026-05-27T09:05:00+08:00",
+                image_path=str(image),
+            )
+
+            result = delete_contact_data(db_path, "张三")
+            image_exists_after_delete = image.exists()
+
+        self.assertEqual(1, result.removed_captures)
+        self.assertEqual(0, result.removed_screenshots)
+        self.assertTrue(image_exists_after_delete)
+
 
 def _seed_audit_data(root: Path, db_path: Path) -> None:
     init_db(db_path)
+    captures_dir = root / "data" / "captures"
+    captures_dir.mkdir(parents=True)
+    image = captures_dir / "zhangsan.png"
+    image.write_bytes(b"zhangsan screenshot")
     ingest_capture(
         db_path,
         raw_text="张三\n你上次提到的问题，我这边还没回复，今天补给你。",
         contact_hint="张三",
         source="test",
         captured_at="2026-05-27T09:00:00+08:00",
+        image_path=str(image),
     )
     record_feedback(
         db_path,

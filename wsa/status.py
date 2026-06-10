@@ -101,9 +101,10 @@ def build_status_report(
         log_exists=log.exists(),
         log_line_count=_count_log_lines(log),
         last_log_line=_last_log_line(log),
-        watch_processes=detect_watch_processes(
+        watch_processes=_detect_watch_processes(
             _process_rows() if process_rows is None else process_rows,
             current_pid=os.getpid(),
+            db_path=db,
         ),
         top_followup=top_followup,
     )
@@ -199,7 +200,8 @@ def _detect_watch_processes(
         if pid == current:
             continue
         if _is_watch_command(command):
-            if selected_db is not None and _watch_command_db_path(command) != selected_db:
+            command_db = _watch_command_db_path(command)
+            if selected_db is not None and command_db is not None and command_db != selected_db:
                 continue
             pids.append(pid)
     return tuple(pids)

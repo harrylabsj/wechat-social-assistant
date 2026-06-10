@@ -76,6 +76,43 @@ class RelationshipSourceTests(unittest.TestCase):
         self.assertEqual({"calendar"}, {record.source_type for record in calendar})
         self.assertEqual({"张三", "王五"}, {record.person_name for record in calendar})
 
+    def test_import_directory_skips_unknown_binary_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            source_dir = root / "sources"
+            source_dir.mkdir()
+            (source_dir / "meeting.md").write_text(
+                "# 项目会\n\n日期：2026-05-29\n参会人：张三\n\n讨论项目计划。",
+                encoding="utf-8",
+            )
+            (source_dir / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff")
+            init_db(db_path)
+
+            result = import_relationship_sources(db_path, paths=[source_dir], dry_run=True)
+
+        self.assertEqual(1, result.parsed_count)
+        self.assertEqual(1, result.skipped_count)
+        self.assertEqual({"meeting": 1}, result.by_type)
+
+    def test_explicit_text_kind_skips_files_that_are_not_utf8(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            binary_file = root / "photo.png"
+            binary_file.write_bytes(b"\xff\xfe\x00\x00")
+            init_db(db_path)
+
+            result = import_relationship_sources(
+                db_path,
+                paths=[binary_file],
+                kind="meeting",
+                dry_run=True,
+            )
+
+        self.assertEqual(0, result.parsed_count)
+        self.assertEqual(1, result.skipped_count)
+
 
 def _write_source_fixtures(root: Path) -> list[Path]:
     contacts = root / "contacts.vcf"

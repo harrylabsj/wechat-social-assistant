@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from wsa.feedback import list_feedback, record_feedback
@@ -72,6 +73,41 @@ class FeedbackLoopTests(unittest.TestCase):
 
         self.assertNotIn("李四", [suggestion.person_name for suggestion in before])
         self.assertIn("李四", [suggestion.person_name for suggestion in after])
+
+    def test_snooze_date_is_normalized_to_aware_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_project_followup(db_path)
+
+            record = record_feedback(
+                db_path,
+                person_name="李四",
+                action="snooze",
+                until_at="2026-06-30",
+                created_at="2026-05-27T10:00:00+08:00",
+            )
+            suggestions = build_suggestions(db_path, as_of="2026-05-28T12:00:00+08:00", min_score=0)
+
+        self.assertTrue(record.until_at.startswith("2026-06-30T00:00:00"))
+        self.assertIsNotNone(datetime.fromisoformat(record.until_at).tzinfo)
+        self.assertNotIn("李四", [suggestion.person_name for suggestion in suggestions])
+
+    def test_invalid_feedback_timestamp_is_rejected_before_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            init_db(db_path)
+
+            with self.assertRaisesRegex(ValueError, "invalid ISO timestamp or date"):
+                record_feedback(
+                    db_path,
+                    person_name="李四",
+                    action="snooze",
+                    until_at="tomorrow",
+                    created_at="2026-05-27T10:00:00+08:00",
+                )
+            rows = list_feedback(db_path, person_name="李四")
+
+        self.assertEqual([], rows)
 
     def test_mark_done_suppresses_current_evidence_but_new_capture_reopens_followup(self):
         with tempfile.TemporaryDirectory() as tmpdir:

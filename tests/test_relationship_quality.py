@@ -64,6 +64,27 @@ class RelationshipQualityTests(unittest.TestCase):
         self.assertIn("- 总分：", markdown)
         self.assertIn("证据：项目交流群（3） / 2026-05-27 09:00", markdown)
 
+    def test_quality_next_action_uses_as_of_for_suggestion_recency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="李四\n最近看到一篇文章，挺有意思。",
+                contact_hint="李四",
+                source="test",
+                captured_at="2026-05-01T09:00:00+08:00",
+            )
+
+            cards = build_relationship_quality_cards(
+                db_path,
+                as_of="2026-05-02T12:00:00+08:00",
+                min_suggestion_score=0,
+            )
+
+        by_name = {card.name: card for card in cards}
+        self.assertEqual("轻量问候", by_name["李四"].next_action.action)
+
 
 def _seed_quality_data(db_path: Path) -> None:
     init_db(db_path)

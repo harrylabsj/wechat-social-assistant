@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .store import connect, init_db, now_iso
-from .timefmt import format_display_time
+from .timefmt import format_display_time, normalize_datetime
 
 
 FEEDBACK_ACTIONS = (
@@ -47,7 +47,8 @@ def record_feedback(
         raise ValueError(f"unknown feedback action: {action}")
     if action == "snooze" and not until_at:
         raise ValueError("snooze feedback requires until_at")
-    created = created_at or now_iso()
+    created = normalize_datetime(created_at) if created_at else now_iso()
+    until = normalize_datetime(until_at) if until_at else None
     with connect(db_path) as conn:
         cursor = conn.execute(
             """
@@ -55,7 +56,7 @@ def record_feedback(
             (person_name, action, note, until_at, created_at)
             values (?, ?, ?, ?, ?)
             """,
-            (name, action, note, until_at, created),
+            (name, action, note, until, created),
         )
         conn.commit()
         feedback_id = int(cursor.lastrowid)
@@ -64,7 +65,7 @@ def record_feedback(
         person_name=name,
         action=action,
         note=note,
-        until_at=until_at,
+        until_at=until,
         created_at=created,
     )
 

@@ -123,6 +123,30 @@ class CaptureCommandTests(unittest.TestCase):
             self.assertIn(f"image_attached={image_path}", output)
             self.assertNotIn("duplicate_image_removed=", output)
 
+    def test_manual_capture_keeps_screenshot_when_ocr_text_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            image_path = root / "data" / "captures" / "empty.png"
+
+            def fake_capture(path, *_args, **_kwargs):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"empty screenshot")
+
+            stderr = io.StringIO()
+            with (
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.capture_screenshot", side_effect=fake_capture),
+                patch("wsa.cli.ocr_image", return_value=" \n\t\n"),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(["--db", str(db_path), "capture", "--contact", "李四"])
+            image_exists_after_capture = image_path.exists()
+
+        self.assertEqual(2, exit_code)
+        self.assertTrue(image_exists_after_capture)
+        self.assertIn("ingest error: empty capture text", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

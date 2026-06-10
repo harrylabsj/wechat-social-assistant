@@ -44,6 +44,7 @@ class SourceImportResult:
     imported_count: int
     duplicate_count: int
     by_type: dict[str, int]
+    skipped_count: int = 0
     dry_run: bool = False
 
 
@@ -56,13 +57,16 @@ def import_relationship_sources(
     imported_at: str | None = None,
 ) -> SourceImportResult:
     init_db(db_path)
-    files = _expand_paths(paths, kind=kind)
+    files, skipped = _expand_paths(paths, kind=kind)
     parsed: list[RelationshipSource] = []
     imported = 0
     duplicates = 0
     timestamp = imported_at or now_iso()
     for path in files:
-        parsed.extend(_parse_path(path, kind=kind, imported_at=timestamp))
+        try:
+            parsed.extend(_parse_path(path, kind=kind, imported_at=timestamp))
+        except UnicodeDecodeError:
+            skipped += 1
     if not dry_run:
         for source in parsed:
             inserted = _insert_source(db_path, source)
@@ -79,6 +83,7 @@ def import_relationship_sources(
         imported_count=imported,
         duplicate_count=duplicates,
         by_type=by_type,
+        skipped_count=skipped,
         dry_run=dry_run,
     )
 
@@ -214,8 +219,9 @@ def _ensure_person(conn, name: str, current_time: str, occurred_at: str | None) 
     )
 
 
-def _expand_paths(paths: list[Path | str], *, kind: str) -> list[Path]:
+def _expand_paths(paths: list[Path | str], *, kind: str) -> tuple[list[Path], int]:
     result: list[Path] = []
+    skipped = 0
     for value in paths:
         path = Path(value).expanduser()
         if not path.exists():
@@ -225,10 +231,20 @@ def _expand_paths(paths: list[Path | str], *, kind: str) -> list[Path]:
                 people_dir = _obsidian_people_dir(path)
                 result.extend(_obsidian_contact_files(people_dir))
             else:
-                result.extend(sorted(item for item in path.iterdir() if item.is_file()))
+                files = sorted(item for item in path.iterdir() if item.is_file())
+                supported = [item for item in files if _is_supported_source_file(item, kind)]
+                skipped += len(files) - len(supported)
+                result.extend(supported)
         else:
-            result.append(path)
-    return result
+            if _is_supported_source_file(path, kind):
+                result.append(path)
+            else:
+                skipped += 1
+    return result, skipped
+
+
+def _is_supported_source_file(path: Path, kind: str) -> bool:
+    return kind != "auto" or _detect_kind(path, kind) is not None
 
 
 def _looks_like_obsidian_vault(path: Path) -> bool:
@@ -266,7 +282,7 @@ def _parse_path(path: Path, *, kind: str, imported_at: str) -> list[Relationship
     return []
 
 
-def _detect_kind(path: Path, kind: str) -> str:
+def _detect_kind(path: Path, kind: str) -> str | None:
     if kind != "auto":
         return kind
     suffix = path.suffix.lower()
@@ -280,7 +296,7 @@ def _detect_kind(path: Path, kind: str) -> str:
         return "obsidian"
     if suffix in {".md", ".txt"}:
         return "meeting"
-    return "meeting"
+    return None
 
 
 def _parse_vcard(path: Path, *, imported_at: str) -> list[RelationshipSource]:

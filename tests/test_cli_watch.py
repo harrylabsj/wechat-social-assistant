@@ -23,6 +23,16 @@ class WatchLogTests(unittest.TestCase):
 
         self.assertEqual(Path("/tmp/wsa-test/watch.log"), args.log_file)
 
+    def test_watch_parser_defaults_to_wechat_apps(self):
+        args = build_parser().parse_args(["watch"])
+
+        self.assertEqual(["WeChat", "微信"], args.app)
+
+    def test_watch_parser_allows_replacing_target_apps(self):
+        args = build_parser().parse_args(["watch", "--app", "Comet"])
+
+        self.assertEqual(["Comet"], args.app)
+
     def test_watch_uses_saved_interval_when_not_provided(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -227,6 +237,51 @@ class WatchLogTests(unittest.TestCase):
         self.assertIn(f"image={image_path}", log_text)
         self.assertIn("via swift", log_text)
         self.assertNotIn("detail=ok via swift", log_text)
+
+    def test_watch_removes_uningested_screenshot_when_ocr_text_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            log_file = root / "data" / "watch.log"
+            image_path = root / "data" / "captures" / "empty.png"
+            args = build_parser().parse_args(
+                [
+                    "--db",
+                    str(db_path),
+                    "watch",
+                    "--contact",
+                    "李四",
+                    "--interval",
+                    "5",
+                    "--log-file",
+                    str(log_file),
+                ]
+            )
+
+            def fake_capture(path, *_args, **_kwargs):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"empty screenshot")
+
+            with (
+                patch(
+                    "wsa.cli.frontmost_app_status",
+                    return_value=SimpleNamespace(name="微信", method="swift", detail="ok"),
+                ),
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.capture_screenshot", side_effect=fake_capture),
+                patch("wsa.cli.ocr_image", return_value=" \n\t\n"),
+                patch("wsa.cli.time.sleep", side_effect=KeyboardInterrupt),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                cmd_watch(args)
+
+            log_text = log_file.read_text(encoding="utf-8")
+
+        self.assertFalse(image_path.exists())
+        self.assertIn("action=error", log_text)
+        self.assertIn("empty capture text", log_text)
 
 
 if __name__ == "__main__":

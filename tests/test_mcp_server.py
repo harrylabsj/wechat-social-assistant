@@ -234,6 +234,35 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual("too_pushy", accepted["structuredContent"]["feedback"]["action"])
         self.assertEqual("张三", listed["structuredContent"]["feedback"][0]["person_name"])
 
+    def test_record_feedback_mcp_tool_rejects_invalid_until(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            rejected = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "record_feedback",
+                        "arguments": {
+                            "db_path": str(db_path),
+                            "contact_name": "张三",
+                            "action": "snooze",
+                            "until_at": "tomorrow",
+                            "confirmed": True,
+                            "confirmation_text": "record local feedback",
+                        },
+                    },
+                }
+            )
+            listed = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
+
+        self.assertEqual(-32602, rejected["error"]["code"])
+        self.assertIn("invalid ISO timestamp or date", rejected["error"]["message"])
+        self.assertEqual([], listed["structuredContent"]["feedback"])
+
     def test_confirm_candidate_mcp_tool_requires_explicit_confirmation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "data" / "social.db"

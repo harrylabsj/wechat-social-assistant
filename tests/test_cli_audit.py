@@ -52,6 +52,7 @@ class AuditCommandTests(unittest.TestCase):
         self.assertIn("dry-run", dry_stdout.getvalue())
         self.assertEqual(0, delete_exit)
         self.assertIn("deleted contact", delete_stdout.getvalue())
+        self.assertIn("screenshots=0", delete_stdout.getvalue())
 
 
 if __name__ == "__main__":

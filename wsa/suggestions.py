@@ -17,7 +17,7 @@ from .profiles import (
     speaker_message_map,
 )
 from .store import connect
-from .timefmt import format_display_time
+from .timefmt import format_display_time, parse_datetime
 
 
 ADDRESS_PREFIX_RE = re.compile(r"^(?:[\u4e00-\u9fffA-Za-z]{1,8}(?:总|老师|姐|哥|同学|先生|女士|博士|教授|经理)?[，,、]\s*){1,4}")
@@ -527,7 +527,7 @@ def _shorten_topic(candidate: str, *, max_length: int = 34) -> str:
 
 
 def _parse_dt(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    return parse_datetime(value)
 
 
 def _format_interaction_time(value: str) -> str:

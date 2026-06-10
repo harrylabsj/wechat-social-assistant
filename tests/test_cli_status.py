@@ -129,6 +129,21 @@ class StatusCommandTests(unittest.TestCase):
         self.assertIn("watch: running (1 process)", render_status_report(running))
         self.assertIn("watch: stopped", render_status_report(stopped))
 
+    def test_status_report_filters_watch_processes_by_selected_database(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            selected_db = root / "a" / "social.db"
+            other_db = root / "b" / "social.db"
+            init_db(selected_db)
+            init_db(other_db)
+
+            report = build_status_report(
+                selected_db,
+                process_rows=[f"321 /usr/bin/python3 -m wsa.cli --db {other_db} watch --interval 10"],
+            )
+
+        self.assertFalse(report.watch_running)
+
     def test_status_report_renders_quality_notes_for_limited_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "data" / "social.db"
@@ -190,6 +205,23 @@ class StatusCommandTests(unittest.TestCase):
         killed: list[tuple[int, int]] = []
         rows = [
             "100 /usr/bin/python3 -m wsa.cli --db /tmp/a/social.db watch --interval 10",
+            "101 /usr/bin/python3 -m wsa.cli --db /tmp/b/social.db watch --interval 10",
+        ]
+
+        stopped = stop_watch_processes(
+            process_rows=rows,
+            current_pid=999,
+            db_path=Path("/tmp/a/social.db"),
+            kill_fn=lambda pid, sig: killed.append((pid, sig)),
+        )
+
+        self.assertEqual((100,), stopped)
+        self.assertEqual([(100, 15)], killed)
+
+    def test_stop_watch_processes_matches_default_watch_without_db_argument(self):
+        killed: list[tuple[int, int]] = []
+        rows = [
+            "100 /usr/bin/python3 -m wsa.cli watch --mode screen",
             "101 /usr/bin/python3 -m wsa.cli --db /tmp/b/social.db watch --interval 10",
         ]
 

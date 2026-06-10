@@ -78,6 +78,8 @@ class WSAArgumentParser(argparse.ArgumentParser):
         parsed = super().parse_args(args, namespace)
         if getattr(parsed, "command", None) in {"analyze", "status", "watch", "weekly-report"} and parsed.log_file is None:
             parsed.log_file = Path(parsed.db).parent / "watch.log"
+        if getattr(parsed, "command", None) == "watch" and parsed.app is None:
+            parsed.app = ["WeChat", "微信"]
         if getattr(parsed, "command", None) == "analyze":
             reports_dir = _default_reports_dir(Path(parsed.db))
             if parsed.profiles_out is None:
@@ -407,7 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--contact", help="Contact name hint; omit to guess from OCR.")
     watch.add_argument("--interval", type=int, help="Polling interval in seconds. Defaults to saved watch-interval setting.")
     watch.add_argument("--mode", choices=["screen", "window"], default="screen")
-    watch.add_argument("--app", action="append", default=["WeChat", "微信"])
+    watch.add_argument("--app", action="append", default=None)
     watch.add_argument("--source", default="watch")
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="wechat-chat")
@@ -455,21 +457,26 @@ def cmd_quick_capture(args: argparse.Namespace) -> int:
 def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
     image_path = next_capture_path(root)
-    capture_screenshot(
-        image_path,
-        mode=args.mode,
-        crop=getattr(args, "crop", None),
-        crop_preset=getattr(args, "crop_preset", "none"),
-    )
-    text = ocr_image(image_path)
-    result = ingest_capture(
-        args.db,
-        raw_text=text,
-        contact_hint=args.contact,
-        source=args.source,
-        captured_at=now_iso(),
-        image_path=str(image_path),
-    )
+    try:
+        capture_screenshot(
+            image_path,
+            mode=args.mode,
+            crop=getattr(args, "crop", None),
+            crop_preset=getattr(args, "crop_preset", "none"),
+        )
+        text = ocr_image(image_path)
+        result = ingest_capture(
+            args.db,
+            raw_text=text,
+            contact_hint=args.contact,
+            source=args.source,
+            captured_at=now_iso(),
+            image_path=str(image_path),
+        )
+    except (CaptureError, EmptyCaptureError):
+        if getattr(args, "command", None) == "watch":
+            _remove_duplicate_image(image_path)
+        raise
     status = "inserted" if result.inserted else "duplicate"
     signals = _format_signal_kinds(result.signal_kinds)
     image_field = f"image={image_path}"
@@ -912,14 +919,18 @@ def cmd_candidate_confirm(args: argparse.Namespace) -> int:
 
 
 def cmd_feedback(args: argparse.Namespace) -> int:
-    result = record_feedback(
-        args.db,
-        person_name=args.contact,
-        action=args.action,
-        note=args.note,
-        until_at=args.until_at,
-        created_at=args.created_at,
-    )
+    try:
+        result = record_feedback(
+            args.db,
+            person_name=args.contact,
+            action=args.action,
+            note=args.note,
+            until_at=args.until_at,
+            created_at=args.created_at,
+        )
+    except ValueError as exc:
+        print(f"feedback error: {exc}", file=sys.stderr)
+        return 2
     until = f" until={format_display_time(result.until_at)}" if result.until_at else ""
     print(f"recorded feedback id={result.id} contact={result.person_name} action={result.action}{until}")
     return 0
@@ -974,7 +985,7 @@ def cmd_delete_contact(args: argparse.Namespace) -> int:
         f"people={result.removed_people} captures={result.removed_captures} "
         f"signals={result.removed_signals} feedback={result.removed_feedback} "
         f"candidates={result.removed_candidates} enrichments={result.removed_enrichments} "
-        f"sources={result.removed_sources}"
+        f"sources={result.removed_sources} screenshots={result.removed_screenshots}"
     )
     return 0
 
@@ -1215,7 +1226,8 @@ def cmd_import_source(args: argparse.Namespace) -> int:
     suffix = f" {type_summary}" if type_summary else ""
     print(
         f"{prefix}: scanned={result.scanned_count} parsed={result.parsed_count} "
-        f"imported={result.imported_count} duplicates={result.duplicate_count}{suffix}"
+        f"imported={result.imported_count} duplicates={result.duplicate_count} "
+        f"skipped={result.skipped_count}{suffix}"
     )
     return 0
 

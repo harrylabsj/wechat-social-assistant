@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
@@ -13,7 +12,7 @@ from .relationship_quality import RelationshipQualityCard, build_relationship_qu
 from .sources import RelationshipSource, list_relationship_sources, source_to_dict
 from .store import init_db, now_iso
 from .suggestions import Suggestion, build_suggestions
-from .timefmt import format_display_time
+from .timefmt import format_display_time, normalize_datetime
 
 
 COMMITMENT_ACTIONS = {"补回复", "确认时间", "项目跟进", "回答问题"}
@@ -138,10 +137,7 @@ def _priority_followups(suggestions: list[Suggestion], *, limit: int) -> list[Da
 def _analysis_time(as_of: str | None) -> str:
     if not as_of:
         return now_iso()
-    parsed = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
-    return parsed.isoformat(timespec="seconds")
+    return normalize_datetime(as_of)
 
 
 def _cooling_contacts(cards: list[RelationshipQualityCard], *, limit: int) -> list[DashboardEntry]:

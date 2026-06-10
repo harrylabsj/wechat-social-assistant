@@ -14,7 +14,7 @@ from .profiles import (
 )
 from .store import connect
 from .suggestions import Suggestion, build_suggestions
-from .timefmt import format_display_time
+from .timefmt import format_display_time, parse_datetime
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ def build_relationship_quality_cards(
     if not db.exists():
         return []
     selected_profiles = profiles if profiles is not None else build_profiles(db)
-    suggestions = build_suggestions(db, limit=1000, min_score=min_suggestion_score)
+    suggestions = build_suggestions(db, as_of=as_of, limit=1000, min_score=min_suggestion_score)
     suggestions_by_person = _suggestions_by_person(suggestions)
     cards = [
         _quality_card(db, profile, suggestions_by_person.get(profile.name), as_of=as_of)
@@ -469,7 +469,7 @@ def _days_since(value: str, *, as_of: str | None) -> int:
 def _parse_dt(value: str | None) -> datetime:
     if not value:
         return datetime.now().astimezone()
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    return parse_datetime(value)
 
 
 def _compact_excerpt(lines: Iterable[str], *, max_length: int = 120) -> str:

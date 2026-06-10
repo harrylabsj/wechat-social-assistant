@@ -64,6 +64,35 @@ class FeedbackCommandTests(unittest.TestCase):
         self.assertIn("# 反馈记录", output)
         self.assertIn("| 李四 | snooze | 2026-05-30 09:00 |", output)
 
+    def test_feedback_command_rejects_invalid_until_before_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_feedback_cli_data(db_path)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "feedback",
+                        "李四",
+                        "snooze",
+                        "--until",
+                        "tomorrow",
+                    ]
+                )
+            list_stdout = io.StringIO()
+            with contextlib.redirect_stdout(list_stdout):
+                list_exit = main(["--db", str(db_path), "feedback-list", "--contact", "李四"])
+
+        self.assertEqual(2, exit_code)
+        self.assertEqual("", stdout.getvalue())
+        self.assertIn("feedback error: invalid ISO timestamp or date", stderr.getvalue())
+        self.assertEqual(0, list_exit)
+        self.assertIn("暂无反馈记录", list_stdout.getvalue())
+
 
 def _seed_feedback_cli_data(db_path: Path) -> None:
     init_db(db_path)
