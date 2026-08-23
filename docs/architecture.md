@@ -1,6 +1,6 @@
 # WeChat Social Assistant 架构设计
 
-状态：`v1.0` 本地优先基线（2026-08-23）
+状态：`v1.1` 本地优先基线（2026-08-23）
 
 ## 1. 目标与边界
 
@@ -21,9 +21,9 @@ flowchart LR
     Plugin[OpenClaw 原生 Plugin\n薄适配，仅转发 MCP]
     MCP[MCP stdio\n结构化 tools/resources/prompts]
     CLI[CLI / Python API\n显式命令与回归测试]
-    Capture[感知适配层\n窗口截图 + Vision OCR]
+    Capture[感知适配层\nConnector + 窗口截图 + Vision OCR]
     Core[本地关系引擎\n解析、去重、信号、建议、质量]
-    Store[(SQLite\n本地 social.db)]
+    Store[(SQLite\nWAL + migrations + review queue)]
     Files[(本地 captures/reports\n用户提供的来源文件)]
 
     Host --> Skill
@@ -58,7 +58,7 @@ OpenClaw 插件配置：
 - `pythonPath`：安装了 WSA 的 Python（默认 `python3`）。
 - `trustedWrites=false`：默认只注册读工具；启用后仍必须满足 MCP 的 `confirmed` 和精确 `confirmation_text`。
 
-插件是一次性启动 Python MCP 子进程、发送一个 `tools/call` 请求并读取结构化响应的薄桥接；超时 20 秒、响应 2 MiB 上限，避免宿主被失控进程或异常 OCR 输出拖垮。
+插件是一次性启动 Python MCP 子进程、发送一个 `tools/call` 请求并读取结构化响应的薄桥接；超时 20 秒、响应 2 MiB 上限，避免宿主被失控进程或异常 OCR 输出拖垮。插件把 `allowedRoot` 作为可信配置传给 `WSA_ALLOWED_ROOT`，MCP 会拒绝越过该根目录的数据库、截图和日志路径；MCP 进程初始化时默认把当前工作目录设为可信根。
 
 ## 3. 数据流与时间语义
 
@@ -93,7 +93,7 @@ sequenceDiagram
 
 ### 3.1 OCR observation 表
 
-`captures` 保留一次采集的业务记录；`ocr_observations` 保留该截图中每条 OCR 观察的结构化证据：
+`captures` 保留一次采集的业务记录；`ocr_observations` 保留该截图中每条 OCR 观察的结构化证据；`ocr_reviews`/`ocr_review_events` 保留用户校正状态和审计事件：
 
 ```text
 ocr_observations(
@@ -103,7 +103,9 @@ ocr_observations(
 )
 ```
 
-坐标使用 Vision 的 0..1 归一化坐标（左下角为原点），`speaker_candidate` 是低置信度启发式候选，不是已确认联系人。旧数据库升级时会把已有 `clean_text` 按行回填为 `source=text` 的无坐标 observation；新 Vision OCR 则保存 confidence、bbox 和 `source=vision`。MCP 的 `get_capture_observations` 可供通用 Agent 读取这些证据，避免宿主只能看到一段不可定位的 OCR 长文本。
+坐标使用 Vision 的 0..1 归一化坐标（左下角为原点），`speaker_candidate` 是低置信度启发式候选，不是已确认联系人。旧数据库升级时会把已有 `clean_text` 按行回填为 `source=text` 的无坐标 observation；新 Vision OCR 则保存 confidence、bbox 和 `source=vision`。用户 review 不覆盖原始 observation，而是把生效文本物化到 `captures.corrected_text`；分析查询统一使用 `coalesce(corrected_text, clean_text)`。MCP 的 `get_capture_observations` 和 `list_ocr_reviews` 可供通用 Agent 定位并请求人工校正证据。
+
+数据库通过 `schema_migrations(version, applied_at)` 顺序升级。当前版本为 2：v1 引入结构化 OCR，v2 引入校正队列和生效文本。连接默认启用 WAL、5 秒 busy timeout 和 `synchronous=normal`；`wsa backup --yes` 使用 SQLite backup API 生成一致快照，而不是直接复制可能尚未合并的 WAL 文件。
 
 ## 4. 感知层：为什么当前使用 OCR
 
@@ -128,11 +130,15 @@ ocr_observations(
 ## 5. 核心模块
 
 - `wsa/store.py`：SQLite schema、去重、图片所有权、观察/互动时间语义、派生联系人。
+- `wsa/audit.py`：本地表行数、schema 版本、数据路径和删除影响审计。
+- `wsa/reviews.py`：低置信度 OCR review 队列、人工校正、生效文本物化和审计事件。
+- `wsa/security.py`：MCP 可信根路径策略；CLI/Python API 不受该传输层策略限制。
+- `wsa/connectors.py`：`CaptureConnector` seam、窗口/整屏采集 connector 和 Accessibility 权限探测。
 - `wsa/parser.py`：OCR 文本清洗、联系人提示、信号提取。
 - `wsa/profiles.py`：联系人/群聊/群内发言人画像、链接/文件/组织线索；低置信度的普通短句不进入 speaker。
 - `wsa/suggestions.py`、`wsa/relationship_quality.py`、`wsa/dashboard.py`：只根据证据和明确互动时间计算建议、质量和仪表盘。
 - `wsa/mcp_server.py`：唯一跨宿主结构化契约；写工具必须携带精确确认字段。
-- `wsa/ocr.py`：macOS 捕获、前台应用/窗口识别、Vision OCR、用户缓存中的 native helper 编译。
+- `wsa/ocr.py`：通过 connector 调用 macOS 捕获、前台应用/窗口识别、Vision OCR、用户缓存中的 native helper 编译。
 - `agent/...`：宿主安装资产，不得承载关系算法。
 
 ## 6. 安全与权限模型
@@ -140,11 +146,11 @@ ocr_observations(
 读写操作分为四类：
 
 1. **纯读**：status、audit、contacts、brief、quality、dashboard、reports、sources、candidates、feedback list、recent captures。
-2. **本地数据库写入**：ingest、feedback、candidate confirm、import source/archive、Obsidian import、analyze。
+2. **本地数据库写入**：ingest、feedback、OCR review、candidate confirm、import source/archive、Obsidian import、analyze。
 3. **本地文件/删除**：capture/watch、export、delete、Obsidian export、reset。
 4. **进程控制**：watch-interval、watch、stop-watch。
 
-Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。
+Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。`record_ocr_review` 只能带精确的 `confirmation_text="review OCR observation"` 写入 review；原始 OCR 和截图不会被覆盖。
 
 ## 7. 发布与安装布局
 
@@ -172,6 +178,6 @@ node --check agent/openclaw/wechat-social-assistant-plugin/openclaw_compat.js
 
 - 让 speaker 归因进一步使用 bbox/头像区域和多帧一致性，而不是只靠当前的短行启发式候选。
 - 用 ScreenCaptureKit 指定窗口替换 `screencapture -l`，增加窗口关闭、权限撤销、多显示器和睡眠恢复测试。
-- 为 MCP 增加 schema 版本和 capability discovery；插件只消费 MCP，不与 Python 内部函数耦合。
+- MCP initialize 返回 `schemaVersion=1.1.0` 和 capability discovery；插件只消费 MCP，不与 Python 内部函数耦合。
 - 将企业微信官方长连接作为独立 `official_connector`，与 OCR connector 共享 `CaptureEvent`/`InteractionEvent` 事件模型。
 - 增加脱敏日志、密钥/路径红线检查和一套宿主互操作 smoke test（Hermes wrapper、OpenClaw plugin、裸 MCP）。

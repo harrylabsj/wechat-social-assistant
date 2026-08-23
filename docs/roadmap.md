@@ -68,3 +68,12 @@
 - CLI `export-data --yes` writes a local JSON snapshot for migration/backup.
 - CLI `delete-contact --dry-run/--yes` previews or removes one contact's local records.
 - MCP `get_audit_report` and `wsa://audit` expose audit data read-only; destructive delete remains CLI-only with confirmation.
+
+## v1.1 Evidence Quality and Host Safety - shipped
+
+- Add explicit `schema_migrations` with structured OCR and OCR review migrations.
+- Enable SQLite WAL, busy timeout, consistent backup API, and schema version reporting.
+- Restrict MCP database, screenshot, and log paths to the launcher-provided `WSA_ALLOWED_ROOT`.
+- Add `ocr_reviews`/`ocr_review_events`, `wsa ocr-review`, `list_ocr_reviews`, and confirmed `record_ocr_review`.
+- Add a `CaptureConnector` boundary plus macOS Accessibility permission probing; keep Vision OCR as fallback.
+- Extend MCP initialize metadata and OpenClaw/Hermes assets with capability and review contracts.

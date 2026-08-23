@@ -64,7 +64,7 @@ def build_suggestions(
                 continue
             recent_captures = conn.execute(
                 """
-                select clean_text, captured_at
+                select coalesce(corrected_text, clean_text) as clean_text, captured_at
                 from captures
                 where person_id = ?
                 order by captured_at desc, id desc
@@ -277,7 +277,9 @@ def _speaker_signal_context(db_path: Path | str, profile) -> tuple[str, dict[str
     with connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            select p.name as chat_name, c.clean_text, c.captured_at
+            select p.name as chat_name,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text,
+                   c.captured_at
             from captures c
             join people p on p.id = c.person_id
             where p.name in ({placeholders})

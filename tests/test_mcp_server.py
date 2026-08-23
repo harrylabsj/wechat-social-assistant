@@ -33,6 +33,8 @@ class MCPServerContractTests(unittest.TestCase):
                 "record_feedback",
                 "list_recent_captures",
                 "get_capture_observations",
+                "list_ocr_reviews",
+                "record_ocr_review",
             ],
             tool_names,
         )
@@ -84,6 +86,8 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("tools", result["capabilities"])
         self.assertIn("resources", result["capabilities"])
         self.assertIn("prompts", result["capabilities"])
+        self.assertEqual("1.1.0", result["serverInfo"]["schemaVersion"])
+        self.assertIn("ocr_review_queue", result["serverInfo"]["capabilities"])
         self.assertEqual(mcp_server.MCP_TOOLS, tools["result"]["tools"])
         self.assertEqual(mcp_server.MCP_PROMPTS, prompts["result"]["prompts"])
         self.assertEqual(mcp_server.MCP_RESOURCES, resources["result"]["resources"])
@@ -112,6 +116,7 @@ class MCPServerContractTests(unittest.TestCase):
             feedback = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
             observations = _call_tool("get_capture_observations", db_path=db_path, capture_id=1)
+            reviews = _call_tool("list_ocr_reviews", db_path=db_path, max_confidence=None)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
         self.assertIn("audit", audit["structuredContent"])
@@ -142,6 +147,49 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual(1, observations["structuredContent"]["capture_id"])
         self.assertTrue(observations["structuredContent"]["observations"])
         self.assertIn("bbox", observations["structuredContent"]["observations"][0])
+        self.assertTrue(reviews["structuredContent"]["reviews"])
+        self.assertEqual("pending", reviews["structuredContent"]["reviews"][0]["status"])
+
+    def test_ocr_review_mcp_tool_requires_confirmation_and_updates_capture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+            pending = _call_tool("list_ocr_reviews", db_path=db_path, max_confidence=None)
+            observation_id = pending["structuredContent"]["reviews"][0]["observation_id"]
+
+            rejected = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "record_ocr_review",
+                        "arguments": {
+                            "db_path": str(db_path),
+                            "observation_id": observation_id,
+                            "action": "reject",
+                        },
+                    },
+                }
+            )
+            accepted = _call_tool(
+                "record_ocr_review",
+                db_path=db_path,
+                observation_id=observation_id,
+                action="reject",
+                confirmed=True,
+                confirmation_text="review OCR observation",
+            )
+            completed = _call_tool(
+                "list_ocr_reviews",
+                db_path=db_path,
+                status="rejected",
+                max_confidence=None,
+            )
+
+        self.assertEqual(-32602, rejected["error"]["code"])
+        self.assertEqual("rejected", accepted["structuredContent"]["review"]["status"])
+        self.assertEqual(1, completed["structuredContent"]["count"])
 
     def test_resources_and_prompts_are_readable(self):
         with tempfile.TemporaryDirectory() as tmpdir:

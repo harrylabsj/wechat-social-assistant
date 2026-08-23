@@ -37,6 +37,8 @@ class AuditAndDataControlTests(unittest.TestCase):
 
         self.assertEqual(1, audit.table_counts["captures"])
         self.assertEqual(1, audit.table_counts["ocr_observations"])
+        self.assertEqual(2, audit.schema_version)
+        self.assertEqual(0, audit.table_counts["ocr_reviews"])
         self.assertEqual(1, audit.table_counts["relationship_sources"])
         self.assertIn("# 本地数据审计", markdown)
         self.assertEqual(export_path, export_result.out_path)

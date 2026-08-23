@@ -13,6 +13,8 @@ AUDIT_TABLES = (
     "captures",
     "capture_signals",
     "ocr_observations",
+    "ocr_reviews",
+    "ocr_review_events",
     "contact_feedback",
     "relationship_candidates",
     "contact_enrichments",
@@ -24,6 +26,7 @@ AUDIT_TABLES = (
 class AuditReport:
     db_path: Path
     generated_at: str
+    schema_version: int
     table_counts: dict[str, int]
     data_paths: dict[str, str]
 
@@ -42,6 +45,8 @@ class DeleteContactResult:
     removed_captures: int
     removed_signals: int
     removed_observations: int
+    removed_reviews: int
+    removed_review_events: int
     removed_feedback: int
     removed_candidates: int
     removed_enrichments: int
@@ -55,9 +60,12 @@ def build_audit_report(db_path: Path | str) -> AuditReport:
     db = Path(db_path)
     with connect(db) as conn:
         counts = _table_counts(conn)
+        schema_row = conn.execute("select coalesce(max(version), 0) from schema_migrations").fetchone()
+        version = int(schema_row[0] if schema_row else 0)
     return AuditReport(
         db_path=db,
         generated_at=now_iso(),
+        schema_version=version,
         table_counts=counts,
         data_paths={
             "database": str(db),
@@ -75,6 +83,7 @@ def render_audit_report_markdown(report: AuditReport) -> str:
         f"- 数据库：{report.data_paths['database']}",
         f"- 截图目录：{report.data_paths['captures']}",
         f"- 报告目录：{report.data_paths['reports']}",
+        f"- Schema 版本：{report.schema_version}",
         "",
         "| 表 | 行数 |",
         "|---|---:|",
@@ -88,6 +97,7 @@ def audit_report_to_dict(report: AuditReport) -> dict[str, Any]:
     return {
         "db_path": str(report.db_path),
         "generated_at": report.generated_at,
+        "schema_version": report.schema_version,
         "table_counts": dict(report.table_counts),
         "data_paths": dict(report.data_paths),
     }
@@ -101,7 +111,7 @@ def export_local_data(db_path: Path | str, *, out_path: Path | str) -> ExportDat
         tables = {table: _table_rows(conn, table) for table in AUDIT_TABLES}
         counts = {table: len(rows) for table, rows in tables.items()}
     payload = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "generated_at": generated_at,
         "db_path": str(Path(db_path)),
         "tables": tables,
@@ -135,6 +145,8 @@ def delete_contact_data(
         removed_captures=impact["captures"],
         removed_signals=impact["signals"],
         removed_observations=impact["observations"],
+        removed_reviews=impact["reviews"],
+        removed_review_events=impact["review_events"],
         removed_feedback=impact["feedback"],
         removed_candidates=impact["candidates"],
         removed_enrichments=impact["enrichments"],
@@ -151,6 +163,8 @@ def delete_result_to_dict(result: DeleteContactResult) -> dict[str, Any]:
         "removed_captures": result.removed_captures,
         "removed_signals": result.removed_signals,
         "removed_observations": result.removed_observations,
+        "removed_reviews": result.removed_reviews,
+        "removed_review_events": result.removed_review_events,
         "removed_feedback": result.removed_feedback,
         "removed_candidates": result.removed_candidates,
         "removed_enrichments": result.removed_enrichments,
@@ -183,6 +197,8 @@ def _delete_contact_impact(conn, name: str, *, managed_root: Path) -> dict[str, 
         "captures": len(capture_ids),
         "signals": _count_by_ids(conn, "capture_signals", "capture_id", capture_ids),
         "observations": _count_by_ids(conn, "ocr_observations", "capture_id", capture_ids),
+        "reviews": _count_by_observation_capture_ids(conn, "ocr_reviews", capture_ids),
+        "review_events": _count_by_observation_capture_ids(conn, "ocr_review_events", capture_ids),
         "feedback": _count_where(conn, "contact_feedback", "person_name = ?", (name,)),
         "candidates": _count_where(conn, "relationship_candidates", "name = ? or source_chat = ?", (name, name)),
         "enrichments": _count_where(conn, "contact_enrichments", "person_name = ?", (name,)),
@@ -191,6 +207,8 @@ def _delete_contact_impact(conn, name: str, *, managed_root: Path) -> dict[str, 
 
 
 def _delete_contact_rows(conn, name: str, person_ids: list[int], capture_ids: list[int]) -> None:
+    _delete_by_observation_capture_ids(conn, "ocr_review_events", capture_ids)
+    _delete_by_observation_capture_ids(conn, "ocr_reviews", capture_ids)
     _delete_by_ids(conn, "capture_signals", "capture_id", capture_ids)
     _delete_by_ids(conn, "captures", "id", capture_ids)
     _delete_by_ids(conn, "people", "id", person_ids)
@@ -269,6 +287,38 @@ def _delete_by_ids(conn, table: str, column: str, ids: list[int]) -> None:
         return
     placeholders = ", ".join("?" for _ in ids)
     conn.execute(f"delete from {table} where {column} in ({placeholders})", ids)
+
+
+def _count_by_observation_capture_ids(conn, table: str, capture_ids: list[int]) -> int:
+    if not capture_ids:
+        return 0
+    placeholders = ", ".join("?" for _ in capture_ids)
+    return int(
+        conn.execute(
+            f"""
+            select count(*)
+            from {table} r
+            join ocr_observations o on o.id = r.observation_id
+            where o.capture_id in ({placeholders})
+            """,
+            capture_ids,
+        ).fetchone()[0]
+    )
+
+
+def _delete_by_observation_capture_ids(conn, table: str, capture_ids: list[int]) -> None:
+    if not capture_ids:
+        return
+    placeholders = ", ".join("?" for _ in capture_ids)
+    conn.execute(
+        f"""
+        delete from {table}
+        where observation_id in (
+            select id from ocr_observations where capture_id in ({placeholders})
+        )
+        """,
+        capture_ids,
+    )
 
 
 def _count_where(conn, table: str, where: str, params: tuple[Any, ...]) -> int:

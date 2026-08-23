@@ -1,7 +1,7 @@
 {
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenClaw native bridge to the local-first WeChat Social Assistant MCP server.",
   "skills": [
     "./skills"
@@ -17,6 +17,10 @@
       "dbPath": {
         "type": "string",
         "description": "Optional path to the local social.db."
+      },
+      "allowedRoot": {
+        "type": "string",
+        "description": "Trusted root for MCP database, screenshots, and log paths; defaults to the database directory."
       },
       "pythonPath": {
         "type": "string",
@@ -48,7 +52,9 @@
       "wsa_feedback_list",
       "wsa_recent_captures",
       "wsa_capture_observations",
+      "wsa_ocr_reviews",
       "wsa_record_feedback",
+      "wsa_record_ocr_review",
       "wsa_confirm_relationship_candidate"
     ]
   },

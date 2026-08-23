@@ -22,9 +22,16 @@ function resolveConfig(api) {
   const nested = api?.config?.plugins?.entries?.[OPENCLAW_PLUGIN_ID]?.config || {};
   const direct = api?.pluginConfig || {};
   const config = { ...direct, ...nested };
+  const projectRoot = path.resolve(nonEmptyString(config.projectRoot) || process.cwd());
+  const configuredDbPath = nonEmptyString(config.dbPath);
+  const dbPath = configuredDbPath ? path.resolve(projectRoot, configuredDbPath) : undefined;
   return {
-    projectRoot: path.resolve(nonEmptyString(config.projectRoot) || process.cwd()),
-    dbPath: nonEmptyString(config.dbPath),
+    projectRoot,
+    dbPath,
+    allowedRoot: path.resolve(
+      nonEmptyString(config.allowedRoot) ||
+        (dbPath ? path.dirname(dbPath) : projectRoot),
+    ),
     pythonPath: nonEmptyString(config.pythonPath) || 'python3',
     writesEnabled: truthy(config.trustedWrites),
   };
@@ -37,8 +44,11 @@ function validateProjectRoot(projectRoot) {
   return projectRoot;
 }
 
-export function runMcpTool({ pythonPath, projectRoot, dbPath, toolName, arguments: input = {} }) {
+export function runMcpTool({ pythonPath, projectRoot, dbPath, allowedRoot, toolName, arguments: input = {} }) {
   const cwd = validateProjectRoot(projectRoot);
+  const trustedRoot = path.resolve(
+    allowedRoot || (dbPath ? path.dirname(dbPath) : projectRoot),
+  );
   const args = ['-m', 'wsa.mcp_server'];
   const payload = {
     jsonrpc: '2.0',
@@ -53,7 +63,15 @@ export function runMcpTool({ pythonPath, projectRoot, dbPath, toolName, argument
     },
   };
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(pythonPath, args, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        WSA_MCP_ENFORCE_PATHS: '1',
+        WSA_ALLOWED_ROOT: trustedRoot,
+      },
+    });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -201,6 +219,13 @@ const READ_TOOLS = [
       required: ['capture_id'],
     },
   },
+  {
+    name: 'wsa_ocr_reviews', mcpName: 'list_ocr_reviews', description: 'Read the low-confidence OCR review queue.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { status: { type: 'string' }, max_confidence: { type: 'number', minimum: 0, maximum: 1 }, limit: { type: 'integer' } },
+    },
+  },
 ];
 
 const WRITE_TOOLS = [
@@ -224,6 +249,18 @@ const WRITE_TOOLS = [
         confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' },
       },
       required: ['confirmed', 'confirmation_text'],
+    },
+  },
+  {
+    name: 'wsa_record_ocr_review', mcpName: 'record_ocr_review', description: 'Accept, reject, or correct one OCR observation after explicit confirmation.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        observation_id: { type: 'integer', minimum: 1 }, action: { type: 'string' },
+        corrected_text: { type: 'string' }, corrected_speaker: { type: 'string' }, note: { type: 'string' },
+        confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' }, reviewed_at: { type: 'string' },
+      },
+      required: ['observation_id', 'action', 'confirmed', 'confirmation_text'],
     },
   },
 ];

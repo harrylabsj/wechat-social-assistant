@@ -15,10 +15,19 @@ class EmptyCaptureError(ValueError):
     pass
 
 
+class DatabaseMigrationError(RuntimeError):
+    """Raised when a database is newer than the running WSA schema."""
+
 _AUTO_INTERACTION = object()
+SCHEMA_VERSION = 2
 
 
 SCHEMA = """
+create table if not exists schema_migrations (
+    version integer primary key,
+    applied_at text not null
+);
+
 create table if not exists people (
     id integer primary key autoincrement,
     name text not null unique,
@@ -36,6 +45,7 @@ create table if not exists captures (
     source text not null,
     raw_text text not null,
     clean_text text not null,
+    corrected_text text,
     text_hash text not null,
     image_path text,
     image_managed integer not null default 0,
@@ -66,6 +76,28 @@ create table if not exists ocr_observations (
     speaker_confidence real,
     created_at text not null,
     unique(capture_id, sequence)
+);
+
+create table if not exists ocr_reviews (
+    id integer primary key autoincrement,
+    observation_id integer not null unique references ocr_observations(id) on delete cascade,
+    status text not null check(status in ('accepted', 'rejected', 'corrected')),
+    corrected_text text,
+    corrected_speaker text,
+    note text not null default '',
+    reviewed_at text not null,
+    created_at text not null,
+    updated_at text not null
+);
+
+create table if not exists ocr_review_events (
+    id integer primary key autoincrement,
+    observation_id integer not null references ocr_observations(id) on delete cascade,
+    action text not null check(action in ('accept', 'reject', 'correct')),
+    corrected_text text,
+    corrected_speaker text,
+    note text not null default '',
+    created_at text not null
 );
 
 create table if not exists contact_feedback (
@@ -133,6 +165,12 @@ on ocr_observations(capture_id, sequence);
 
 create index if not exists idx_ocr_observations_speaker
 on ocr_observations(speaker_candidate, speaker_confidence);
+
+create index if not exists idx_ocr_reviews_status
+on ocr_reviews(status, reviewed_at);
+
+create index if not exists idx_ocr_review_events_observation
+on ocr_review_events(observation_id, created_at);
 
 create index if not exists idx_contact_feedback_person_time
 on contact_feedback(person_name, created_at);
@@ -208,10 +246,50 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def backup_database(
+    db_path: Path | str,
+    backup_path: Path | str,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Create a consistent SQLite backup without copying a live WAL file."""
+
+    source = Path(db_path).expanduser().resolve(strict=False)
+    target = Path(backup_path).expanduser().resolve(strict=False)
+    if not source.exists():
+        raise FileNotFoundError(f"database does not exist: {source}")
+    if source == target:
+        raise ValueError("backup path must differ from the source database")
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"backup already exists: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(source, timeout=5.0) as source_conn:
+        with sqlite3.connect(target, timeout=5.0) as target_conn:
+            source_conn.backup(target_conn)
+    return target
+
+
+def schema_version(db_path: Path | str) -> int:
+    """Return the applied schema version, initializing an empty database first."""
+
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("select coalesce(max(version), 0) from schema_migrations").fetchone()
+    return int(row[0] if row else 0)
+
+
 def connect(db_path: Path | str) -> sqlite3.Connection:
-    conn = sqlite3.connect(Path(db_path), factory=ClosingConnection)
+    conn = sqlite3.connect(Path(db_path), timeout=5.0, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("pragma foreign_keys = on")
+    conn.execute("pragma busy_timeout = 5000")
+    try:
+        conn.execute("pragma journal_mode = wal")
+        conn.execute("pragma synchronous = normal")
+    except sqlite3.DatabaseError:
+        # Read-only snapshots and some virtual filesystems do not permit
+        # changing journal mode. The connection remains usable in that case.
+        pass
     return conn
 
 
@@ -220,7 +298,7 @@ def init_db(db_path: Path | str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
-        _migrate_existing_schema(conn)
+        _apply_schema_migrations(conn)
         conn.commit()
 
 
@@ -379,11 +457,13 @@ def reset_memory(
 def refresh_capture_signals(db_path: Path | str) -> RefreshSignalsResult:
     init_db(db_path)
     with connect(db_path) as conn:
-        captures = conn.execute("select id, clean_text from captures order by id").fetchall()
+        captures = conn.execute(
+            "select id, coalesce(corrected_text, clean_text) as effective_text from captures order by id"
+        ).fetchall()
         conn.execute("delete from capture_signals")
         signal_count = 0
         for capture in captures:
-            signals = extract_signals(capture["clean_text"])
+            signals = extract_signals(capture["effective_text"])
             _insert_capture_signals(conn, int(capture["id"]), signals)
             signal_count += len(signals)
         conn.commit()
@@ -437,14 +517,16 @@ def refresh_derived_people(db_path: Path | str) -> RefreshDerivedPeopleResult:
     with connect(db_path) as conn:
         captures = conn.execute(
             """
-            select p.name as chat_name, c.clean_text, c.captured_at
+            select p.name as chat_name,
+                   coalesce(c.corrected_text, c.clean_text) as effective_text,
+                   c.captured_at
             from captures c
             join people p on p.id = c.person_id
             order by c.captured_at asc, c.id asc
             """
         ).fetchall()
         for capture in captures:
-            lines = [line.strip() for line in capture["clean_text"].splitlines() if line.strip()]
+            lines = [line.strip() for line in capture["effective_text"].splitlines() if line.strip()]
             _ensure_group_speakers(
                 conn,
                 capture["chat_name"],
@@ -509,7 +591,36 @@ def _should_attach_duplicate_image(existing_image_path: str | None) -> bool:
     return not Path(existing_image_path).exists()
 
 
-def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
+def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Apply idempotent, ordered migrations to both old and new databases."""
+
+    conn.execute(
+        """
+        create table if not exists schema_migrations (
+            version integer primary key,
+            applied_at text not null
+        )
+        """
+    )
+    current_row = conn.execute("select coalesce(max(version), 0) from schema_migrations").fetchone()
+    current = int(current_row[0] if current_row else 0)
+    if current > SCHEMA_VERSION:
+        raise DatabaseMigrationError(
+            f"database schema version {current} is newer than supported {SCHEMA_VERSION}"
+        )
+    migrations = {
+        1: _migration_v1_structured_ocr,
+        2: _migration_v2_ocr_reviews,
+    }
+    for version in range(current + 1, SCHEMA_VERSION + 1):
+        migrations[version](conn)
+        conn.execute(
+            "insert into schema_migrations(version, applied_at) values (?, ?)",
+            (version, now_iso()),
+        )
+
+
+def _migration_v1_structured_ocr(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "captures", "image_path", "text")
     _ensure_column(conn, "captures", "image_managed", "integer not null default 0")
     conn.executescript(
@@ -537,6 +648,38 @@ def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _backfill_ocr_observations(conn)
+
+
+def _migration_v2_ocr_reviews(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, "captures", "corrected_text", "text")
+    conn.executescript(
+        """
+        create table if not exists ocr_reviews (
+            id integer primary key autoincrement,
+            observation_id integer not null unique references ocr_observations(id) on delete cascade,
+            status text not null check(status in ('accepted', 'rejected', 'corrected')),
+            corrected_text text,
+            corrected_speaker text,
+            note text not null default '',
+            reviewed_at text not null,
+            created_at text not null,
+            updated_at text not null
+        );
+        create table if not exists ocr_review_events (
+            id integer primary key autoincrement,
+            observation_id integer not null references ocr_observations(id) on delete cascade,
+            action text not null check(action in ('accept', 'reject', 'correct')),
+            corrected_text text,
+            corrected_speaker text,
+            note text not null default '',
+            created_at text not null
+        );
+        create index if not exists idx_ocr_reviews_status
+        on ocr_reviews(status, reviewed_at);
+        create index if not exists idx_ocr_review_events_observation
+        on ocr_review_events(observation_id, created_at);
+        """
+    )
 
 
 def _backfill_ocr_observations(conn: sqlite3.Connection) -> None:

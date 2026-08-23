@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import time
 
@@ -20,6 +21,7 @@ from .candidates import (
     render_candidates_markdown,
     sync_relationship_candidates,
 )
+from .connectors import connector_statuses
 from .dashboard import build_relationship_dashboard, render_relationship_dashboard_markdown
 from .enrichment import (
     ContactEnrichment,
@@ -33,6 +35,14 @@ from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_ca
 from .obsidian_memory import import_obsidian_enrichments
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
+from .reviews import (
+    REVIEW_CONFIRMATION_TEXT,
+    REVIEW_STATUSES,
+    OCRReviewError,
+    list_ocr_reviews,
+    record_ocr_review,
+    render_ocr_reviews,
+)
 from .sources import (
     SOURCE_TYPES,
     import_relationship_sources,
@@ -44,6 +54,7 @@ from .status import build_status_report, render_status_report, status_quality_no
 from .store import (
     EmptyCaptureError,
     connect,
+    backup_database,
     default_db_path,
     ingest_capture,
     init_db,
@@ -51,6 +62,7 @@ from .store import (
     refresh_capture_signals,
     refresh_derived_people,
     reset_memory,
+    schema_version,
 )
 from .suggestions import build_suggestions, followup_strength_label, render_markdown
 from .timefmt import format_display_time
@@ -71,6 +83,11 @@ def _default_reports_dir(db_path: Path) -> Path:
     if db_parent.name == "data":
         return db_parent.parent / "reports"
     return db_parent / "reports"
+
+
+def _default_backup_path(db_path: Path) -> Path:
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    return Path(db_path).parent / "backups" / f"social-{stamp}.db"
 
 
 class WSAArgumentParser(argparse.ArgumentParser):
@@ -136,6 +153,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd = sub.add_parser("init", help="Create the local SQLite database.")
     init_cmd.set_defaults(func=cmd_init)
 
+    backup = sub.add_parser("backup", help="Create a consistent local SQLite backup.")
+    backup.add_argument("--out", type=Path, help="Backup path. Defaults to data/backups/social-<timestamp>.db.")
+    backup.add_argument("--yes", action="store_true", help="Confirm writing the backup file.")
+    backup.set_defaults(func=cmd_backup)
+
+    connectors = sub.add_parser("connectors", help="Show available capture and Accessibility connectors.")
+    connectors.set_defaults(func=cmd_connectors)
+
     ingest = sub.add_parser("ingest", help="Ingest OCR/manual text into the relationship memory.")
     ingest.add_argument("--contact", help="Contact name hint. Recommended for early MVP use.")
     ingest.add_argument("--text", help="Text to ingest.")
@@ -167,6 +192,19 @@ def build_parser() -> argparse.ArgumentParser:
     ocr = sub.add_parser("ocr-image", help="Run OCR for an existing image.")
     ocr.add_argument("image", type=Path)
     ocr.set_defaults(func=cmd_ocr_image)
+
+    ocr_review = sub.add_parser("ocr-review", help="Review low-confidence OCR observations.")
+    ocr_review.add_argument("--status", choices=["pending", *REVIEW_STATUSES], default="pending")
+    ocr_review.add_argument("--max-confidence", type=float, default=0.75)
+    ocr_review.add_argument("--limit", type=int, default=50)
+    ocr_review.add_argument("--observation-id", type=int, help="Observation id to review.")
+    ocr_review.add_argument("--action", choices=["accept", "reject", "correct"])
+    ocr_review.add_argument("--corrected-text")
+    ocr_review.add_argument("--corrected-speaker")
+    ocr_review.add_argument("--note", default="")
+    ocr_review.add_argument("--reviewed-at")
+    ocr_review.add_argument("--yes", action="store_true", help="Confirm writing the OCR review.")
+    ocr_review.set_defaults(func=cmd_ocr_review)
 
     import_image = sub.add_parser(
         "import-image",
@@ -421,7 +459,33 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_init(args: argparse.Namespace) -> int:
     init_db(args.db)
-    print(f"initialized {args.db}")
+    print(f"initialized {args.db} schema={schema_version(args.db)}")
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    if not args.yes:
+        raise SystemExit("Use --yes to write a consistent SQLite backup.")
+    target = args.out or _default_backup_path(args.db)
+    try:
+        version = schema_version(args.db)
+        backup_database(args.db, target)
+    except (FileExistsError, FileNotFoundError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        print(f"backup error: {exc}", file=sys.stderr)
+        return 2
+    print(f"backup={target} schema={version}")
+    return 0
+
+
+def cmd_connectors(args: argparse.Namespace) -> int:
+    for status in connector_statuses():
+        flags = []
+        if status.can_capture:
+            flags.append("capture")
+        if status.can_read_text:
+            flags.append("read_text")
+        capability = ",".join(flags) or "none"
+        print(f"{status.name}: {'available' if status.available else 'unavailable'} capabilities={capability} detail={status.detail}")
     return 0
 
 
@@ -499,6 +563,52 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
 
 def cmd_ocr_image(args: argparse.Namespace) -> int:
     print(ocr_image(args.image))
+    return 0
+
+
+def cmd_ocr_review(args: argparse.Namespace) -> int:
+    if args.observation_id is None:
+        reviews = list_ocr_reviews(
+            args.db,
+            status=args.status,
+            max_confidence=args.max_confidence,
+            limit=args.limit,
+        )
+        print(
+            render_ocr_reviews(
+                reviews,
+                status=args.status,
+                max_confidence=args.max_confidence,
+            ),
+            end="",
+        )
+        return 0
+    if not args.action:
+        print("ocr-review error: --action is required with --observation-id", file=sys.stderr)
+        return 2
+    if not args.yes:
+        print("ocr-review error: use --yes after reviewing the observation", file=sys.stderr)
+        return 2
+    try:
+        result = record_ocr_review(
+            args.db,
+            observation_id=args.observation_id,
+            action=args.action,
+            corrected_text=args.corrected_text,
+            corrected_speaker=args.corrected_speaker,
+            note=args.note,
+            confirmed=True,
+            confirmation_text=REVIEW_CONFIRMATION_TEXT,
+            reviewed_at=args.reviewed_at,
+        )
+    except OCRReviewError as exc:
+        print(f"ocr-review error: {exc}", file=sys.stderr)
+        return 2
+    review = result.review
+    print(
+        f"reviewed observation={review.observation_id} capture={review.capture_id} "
+        f"action={result.action} capture_text_changed={result.capture_text_changed}"
+    )
     return 0
 
 
@@ -994,7 +1104,8 @@ def cmd_delete_contact(args: argparse.Namespace) -> int:
     print(
         f"{prefix}: contact={result.person_name} "
         f"people={result.removed_people} captures={result.removed_captures} "
-        f"signals={result.removed_signals} observations={result.removed_observations} feedback={result.removed_feedback} "
+        f"signals={result.removed_signals} observations={result.removed_observations} "
+        f"reviews={result.removed_reviews} review_events={result.removed_review_events} feedback={result.removed_feedback} "
         f"candidates={result.removed_candidates} enrichments={result.removed_enrichments} "
         f"sources={result.removed_sources} screenshots={result.removed_screenshots}"
     )
@@ -2135,7 +2246,8 @@ def _brief_evidence(
     with connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            select p.name as chat_name, c.captured_at, c.source, c.image_path, c.clean_text
+            select p.name as chat_name, c.captured_at, c.source, c.image_path,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text
             from captures c
             join people p on p.id = c.person_id
             where p.name in ({placeholders})

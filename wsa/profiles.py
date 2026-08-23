@@ -155,7 +155,8 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
         }
         rows = conn.execute(
             """
-            select c.id, p.name as chat_name, c.captured_at, c.clean_text
+            select c.id, p.name as chat_name, c.captured_at,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text
             from captures c
             join people p on p.id = c.person_id
             order by c.captured_at asc, c.id asc

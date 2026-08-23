@@ -6,6 +6,9 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 
 - `wsa status` - inspect database, screenshots, logs, and watch state.
 - `wsa audit` - inspect local table counts and storage paths.
+- `wsa connectors` - inspect window/screen capture availability and macOS Accessibility permission.
+- `wsa backup --out PATH --yes` - create a consistent SQLite backup after confirmation.
+- `wsa ocr-review --max-confidence 0.75` - list low-confidence OCR observations for human review.
 - `wsa contacts --query NAME` - find known contacts, groups, speakers, organizations, and identity hints.
 - `wsa brief NAME` - summarize one contact or matching set of contacts.
 - `wsa dashboard` - render the daily relationship operating dashboard.
@@ -24,11 +27,12 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v1.0 MCP server exposes read tools: `get_status`, `get_audit_report`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, and `list_recent_captures`. Write tools are `record_feedback` and `confirm_relationship_candidate`, and both require explicit confirmation arguments. It also exposes `wsa://status`, `wsa://audit`, `wsa://contacts`, `wsa://daily-report`, `wsa://weekly-report`, `wsa://relationship-quality`, `wsa://relationship-dashboard`, `wsa://relationship-sources`, `wsa://relationship-candidates`, plus prompts for daily review, weekly review, contact follow-up, relationship candidate review, and safe capture review.
+The v1.1 MCP server exposes read tools: `get_status`, `get_audit_report`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, `list_recent_captures`, `get_capture_observations`, and `list_ocr_reviews`. Write tools are `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`; all require explicit confirmation arguments. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
 
 ## Confirm Before Running
 
 - `wsa ingest --contact NAME --text TEXT` - adds manual text to the local database.
+- `wsa ocr-review --observation-id ID --action accept|reject|correct --yes` - applies a confirmed OCR review; `correct` also requires `--corrected-text`.
 - `wsa candidates --sync` - persists discovered candidates to the local pending queue.
 - `wsa candidate-confirm NAME --source-chat GROUP --yes` - promotes a reviewed candidate to confirmed.
 - `wsa feedback NAME ACTION` - records user feedback such as `mark_done`, `snooze`, `too_pushy`, or `good_draft`.

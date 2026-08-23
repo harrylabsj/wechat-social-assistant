@@ -47,6 +47,19 @@ from .relationship_quality import (
     quality_card_to_dict,
     render_relationship_quality_markdown,
 )
+from .reviews import (
+    REVIEW_ACTIONS,
+    REVIEW_CONFIRMATION_TEXT,
+    REVIEW_STATUSES,
+    list_ocr_reviews,
+    record_ocr_review,
+    render_ocr_reviews,
+    review_to_dict,
+)
+from .security import (
+    configure_mcp_path_policy,
+    resolve_mcp_path,
+)
 from .sources import (
     SOURCE_TYPES,
     list_relationship_sources,
@@ -59,7 +72,15 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
+SERVER_SCHEMA_VERSION = "1.1.0"
+MCP_CAPABILITIES = (
+    "read_relationship_memory",
+    "structured_ocr_observations",
+    "ocr_review_queue",
+    "confirmed_local_writes",
+    "path_policy",
+)
 
 MCP_TOOLS = [
     {
@@ -304,6 +325,53 @@ MCP_TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "list_ocr_reviews",
+        "description": "Read the human review queue for low-confidence OCR observations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", *REVIEW_STATUSES],
+                    "default": "pending",
+                },
+                "max_confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "default": 0.75,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "record_ocr_review",
+        "description": "Write an OCR accept/reject/correction after explicit user confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["observation_id", "action", "confirmed", "confirmation_text"],
+            "properties": {
+                "observation_id": {"type": "integer", "minimum": 1},
+                "action": {"type": "string", "enum": list(REVIEW_ACTIONS)},
+                "corrected_text": {"type": "string"},
+                "corrected_speaker": {"type": "string"},
+                "note": {"type": "string"},
+                "confirmed": {"type": "boolean", "description": "Must be true after user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": f"Must exactly equal: {REVIEW_CONFIRMATION_TEXT}",
+                },
+                "reviewed_at": {"type": "string", "description": "Optional ISO audit timestamp."},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
 ]
 
 MCP_RESOURCES = [
@@ -451,6 +519,7 @@ def serve_stdio(infile=sys.stdin, outfile=sys.stdout) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_mcp_path_policy()
     parser = argparse.ArgumentParser(description="Run WeChat Social Assistant as a local-first MCP server.")
     parser.add_argument(
         "--transport",
@@ -475,6 +544,8 @@ def _initialize_result() -> dict[str, Any]:
         "serverInfo": {
             "name": "wechat-social-assistant",
             "version": SERVER_VERSION,
+            "schemaVersion": SERVER_SCHEMA_VERSION,
+            "capabilities": list(MCP_CAPABILITIES),
         },
     }
 
@@ -503,6 +574,8 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "record_feedback": _tool_record_feedback,
         "list_recent_captures": _tool_list_recent_captures,
         "get_capture_observations": _tool_get_capture_observations,
+        "list_ocr_reviews": _tool_list_ocr_reviews,
+        "record_ocr_review": _tool_record_ocr_review,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -608,10 +681,11 @@ def _handle_prompt_get(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_get_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
     report = build_status_report(
-        _db_path(arguments),
-        log_file=_optional_path(arguments.get("log_file")),
-        captures_dir=_optional_path(arguments.get("captures_dir")),
+        db_path,
+        log_file=_optional_path(arguments.get("log_file"), base=db_path.parent),
+        captures_dir=_optional_path(arguments.get("captures_dir"), base=db_path.parent),
     )
     return _tool_result(render_status_report(report), _status_to_dict(report))
 
@@ -960,6 +1034,57 @@ def _tool_get_capture_observations(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _tool_list_ocr_reviews(arguments: dict[str, Any]) -> dict[str, Any]:
+    status = str(arguments.get("status") or "pending")
+    max_confidence = arguments.get("max_confidence", 0.75)
+    if max_confidence in (None, ""):
+        max_confidence = None
+    else:
+        max_confidence = float(max_confidence)
+    reviews = list_ocr_reviews(
+        _db_path(arguments),
+        status=status,
+        max_confidence=max_confidence,
+        limit=_limit(arguments.get("limit"), default=50),
+    )
+    return _tool_result(
+        render_ocr_reviews(reviews, status=status, max_confidence=max_confidence),
+        {
+            "status": status,
+            "max_confidence": max_confidence,
+            "count": len(reviews),
+            "reviews": [review_to_dict(review) for review in reviews],
+        },
+    )
+
+
+def _tool_record_ocr_review(arguments: dict[str, Any]) -> dict[str, Any]:
+    result = record_ocr_review(
+        _db_path(arguments),
+        observation_id=int(arguments.get("observation_id") or 0),
+        action=str(arguments.get("action") or ""),
+        corrected_text=_optional_str(arguments.get("corrected_text")),
+        corrected_speaker=_optional_str(arguments.get("corrected_speaker")),
+        note=str(arguments.get("note") or ""),
+        confirmed=arguments.get("confirmed") is True,
+        confirmation_text=_optional_str(arguments.get("confirmation_text")),
+        reviewed_at=_optional_str(arguments.get("reviewed_at")),
+    )
+    review = result.review
+    text = (
+        "# 已记录 OCR 校正\n\n"
+        f"- observation：{review.observation_id}\n"
+        f"- capture：{review.capture_id}\n"
+        f"- 动作：{result.action}\n"
+        f"- 生效文本：{review.effective_text or '（已排除）'}\n"
+        f"- capture 文本已更新：{'是' if result.capture_text_changed else '否'}\n"
+    )
+    return _tool_result(
+        text,
+        {"review": review_to_dict(review), "capture_text_changed": result.capture_text_changed},
+    )
+
+
 def _profiles_or_empty(db_path: Path) -> list[ContactProfile]:
     if not db_path.exists():
         return []
@@ -978,7 +1103,8 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
     with connect(db_path) as conn:
         rows = conn.execute(
             """
-            select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path, c.clean_text,
+            select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text,
                    (select count(*) from ocr_observations o where o.capture_id = c.id) as observation_count
             from captures c
             join people p on p.id = c.person_id
@@ -1102,15 +1228,18 @@ def _suggestion_to_dict(suggestion: Suggestion) -> dict[str, Any]:
 
 def _db_path(arguments: dict[str, Any]) -> Path:
     value = arguments.get("db_path")
-    if value:
-        return Path(str(value)).expanduser()
-    return default_db_path(Path.cwd())
+    return resolve_mcp_path(
+        value,
+        default=default_db_path(Path.cwd()),
+        label="db_path",
+    )
 
 
-def _optional_path(value: Any) -> Path | None:
+def _optional_path(value: Any, *, base: Path | str | None = None) -> Path | None:
     if value is None or value == "":
         return None
-    return Path(str(value)).expanduser()
+    default = Path(str(value)).expanduser()
+    return resolve_mcp_path(default, default=default, label="path", base=base)
 
 
 def _optional_str(value: Any) -> str | None:

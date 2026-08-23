@@ -10,7 +10,7 @@ import subprocess
 
 from .parser import extract_signals
 from .profiles import build_profiles
-from .store import connect
+from .store import connect, init_db
 from .suggestions import build_suggestions, followup_strength_label
 from .timefmt import format_display_time
 
@@ -52,6 +52,12 @@ def build_status_report(
     db = Path(db_path)
     log = Path(log_file) if log_file is not None else db.parent / "watch.log"
     screenshots = Path(captures_dir) if captures_dir is not None else db.parent / "captures"
+
+    if db.exists():
+        # Status is read-only from the user's perspective, but opening an old
+        # database must still run the idempotent schema migrations before the
+        # effective-text query below.
+        init_db(db)
 
     contact_count = 0
     profile_count = 0
@@ -159,8 +165,10 @@ def status_quality_notes(report: StatusReport) -> tuple[str, ...]:
 
 
 def _count_current_signals(conn) -> int:
-    rows = conn.execute("select clean_text from captures").fetchall()
-    return sum(len(extract_signals(row["clean_text"])) for row in rows)
+    rows = conn.execute(
+        "select coalesce(corrected_text, clean_text) as effective_text from captures"
+    ).fetchall()
+    return sum(len(extract_signals(row["effective_text"])) for row in rows)
 
 
 def _top_followup_summary(db: Path, *, as_of: str | None = None) -> str | None:

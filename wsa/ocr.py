@@ -74,6 +74,27 @@ def capture_screenshot(
     crop: str | None = None,
     crop_preset: str = "none",
 ) -> Path:
+    """Capture through the selected perception connector."""
+
+    from .connectors import CaptureRequest, capture_connector
+
+    return capture_connector(mode).capture(
+        CaptureRequest(
+            output_path=Path(output_path),
+            mode=mode,
+            crop=crop,
+            crop_preset=crop_preset,
+        )
+    )
+
+
+def _capture_screenshot_legacy(
+    output_path: Path | str,
+    *,
+    mode: str = "screen",
+    crop: str | None = None,
+    crop_preset: str = "none",
+) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     args = ["screencapture", "-x", "-o"]

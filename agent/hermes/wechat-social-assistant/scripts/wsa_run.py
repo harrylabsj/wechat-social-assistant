@@ -23,6 +23,7 @@ READ_COMMANDS = {
     "suggest",
     "profiles",
     "ocr-image",
+    "connectors",
 }
 WRITE_COMMANDS = {
     "init",
@@ -45,6 +46,8 @@ WRITE_COMMANDS = {
     "stop-watch",
     "stop",
     "reset",
+    "backup",
+    "ocr-review",
 }
 ALL_COMMANDS = tuple(sorted(READ_COMMANDS | WRITE_COMMANDS))
 

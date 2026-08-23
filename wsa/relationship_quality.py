@@ -340,7 +340,8 @@ def _profile_evidence(db_path: Path, profile: ContactProfile, *, limit: int = 3)
     with connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            select p.name as chat_name, c.captured_at, c.source, c.image_path, c.clean_text
+            select p.name as chat_name, c.captured_at, c.source, c.image_path,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text
             from captures c
             join people p on p.id = c.person_id
             where p.name in ({placeholders})

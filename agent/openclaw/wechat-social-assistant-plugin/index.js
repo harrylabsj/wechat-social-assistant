@@ -7,6 +7,7 @@ const CONFIG_SCHEMA = {
   properties: {
     projectRoot: { type: 'string' },
     dbPath: { type: 'string' },
+    allowedRoot: { type: 'string' },
     pythonPath: { type: 'string' },
     trustedWrites: { type: 'boolean', default: false },
   },
@@ -15,6 +16,7 @@ const CONFIG_SCHEMA = {
 const WRITE_TOOL_NAMES = new Set([
   'wsa_record_feedback',
   'wsa_confirm_relationship_candidate',
+  'wsa_record_ocr_review',
 ]);
 
 function capturedToolSpecs(api, forceWrites = false) {

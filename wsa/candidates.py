@@ -329,7 +329,8 @@ def _candidate_evidence(db_path: Path, name: str, source_chat: str) -> tuple[str
     with connect(db_path) as conn:
         rows = conn.execute(
             """
-            select c.captured_at, c.clean_text
+            select c.captured_at,
+                   coalesce(c.corrected_text, c.clean_text) as clean_text
             from captures c
             join people p on p.id = c.person_id
             where p.name = ?

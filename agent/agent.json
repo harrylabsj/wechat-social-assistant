@@ -1,8 +1,8 @@
 {
-  "schema_version": "2026-05-27",
+  "schema_version": "2026-08-23",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -39,7 +39,9 @@
       "list_feedback",
       "record_feedback",
       "list_recent_captures",
-      "get_capture_observations"
+      "get_capture_observations",
+      "list_ocr_reviews",
+      "record_ocr_review"
     ],
     "resources": [
       "wsa://status",
@@ -59,7 +61,7 @@
       "relationship-candidate-review",
       "safe-capture-review"
     ],
-    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'."
+    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'. The MCP launcher restricts db_path, captures_dir, and log_file to WSA_ALLOWED_ROOT."
   },
   "openclaw_plugin": {
     "manifest": "agent/openclaw/wechat-social-assistant-plugin/openclaw.plugin.json",
@@ -94,13 +96,33 @@
     "hotkey_shortcuts",
     "watch_interval_settings",
     "explicit_watch_mode",
-    "openclaw_native_plugin"
+    "openclaw_native_plugin",
+    "ocr_review_queue",
+    "sqlite_backup_and_migrations",
+    "capture_connector_boundary"
   ],
   "commands": [
     {
       "name": "status",
       "mode": "read",
       "example": "python3 -m wsa.cli status"
+    },
+    {
+      "name": "connectors",
+      "mode": "read",
+      "example": "python3 -m wsa.cli connectors"
+    },
+    {
+      "name": "backup",
+      "mode": "write-files",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli backup --out ./data/backups/social.db --yes"
+    },
+    {
+      "name": "ocr-review",
+      "mode": "read-or-write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli ocr-review --observation-id 12 --action correct --corrected-text '修正后的文本' --yes"
     },
     {
       "name": "audit",

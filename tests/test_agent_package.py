@@ -19,7 +19,7 @@ class AgentPackageTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
-        self.assertEqual("1.0.0", manifest["version"])
+        self.assertEqual("1.1.0", manifest["version"])
         self.assertEqual("python3 -m wsa.cli", manifest["cli"]["entrypoint"])
         self.assertEqual("python3 -m wsa.mcp_server", manifest["mcp"]["command"])
         self.assertEqual("stdio", manifest["mcp"]["transport"])
@@ -57,6 +57,7 @@ class AgentPackageTests(unittest.TestCase):
             command_names,
             {
                 "status",
+                "connectors",
                 "audit",
                 "export-data",
                 "delete-contact",
@@ -137,7 +138,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
         payload = json.loads(doctor_result.stdout)
         self.assertEqual("wechat-social-assistant", payload["agent_id"])
-        self.assertEqual("1.0.0", payload["version"])
+        self.assertEqual("1.1.0", payload["version"])
         self.assertIn("checks", payload)
         self.assertIn("cli_importable", {check["id"] for check in payload["checks"]})
         self.assertIn("mcp_importable", {check["id"] for check in payload["checks"]})

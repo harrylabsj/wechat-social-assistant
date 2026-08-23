@@ -23,6 +23,8 @@ class AgentAssetTests(unittest.TestCase):
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
         self.assertIn("wsa_capture_observations", manifest["contracts"]["tools"])
+        self.assertIn("wsa_ocr_reviews", manifest["contracts"]["tools"])
+        self.assertIn("wsa_record_ocr_review", manifest["contracts"]["tools"])
         self.assertEqual("wechat-social-assistant", package["name"])
         self.assertEqual("./index.js", package["openclaw"]["extensions"][0])
         self.assertTrue((plugin_root / "index.js").exists())
@@ -32,7 +34,12 @@ class AgentAssetTests(unittest.TestCase):
 
     def test_native_helpers_are_included_for_wheel_builds(self):
         native_root = ROOT / "wsa" / "native"
-        for name in ("macos_ocr.swift", "macos_frontmost_app.swift", "macos_frontmost_window.swift"):
+        for name in (
+            "macos_ocr.swift",
+            "macos_frontmost_app.swift",
+            "macos_frontmost_window.swift",
+            "macos_accessibility_probe.swift",
+        ):
             self.assertTrue((native_root / name).exists(), name)
 
 

@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v1.0）
+## Agent 生态（v1.1）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.0 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库、本地多入口关系来源导入，以及本地数据审计、导出和按联系人删除。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.1 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库、本地多入口关系来源导入、OCR 校正队列，以及本地数据审计、备份、导出和按联系人删除。
 
 仓库提供：
 
@@ -17,7 +17,7 @@
 - `agent/openclaw/wechat-social-assistant-plugin/`：OpenClaw 原生插件，默认只注册读工具，内部复用 MCP。
 - `wsa-mcp` / `python3 -m wsa.mcp_server`：本地优先 MCP server。
 - `docs/architecture.md`：分层架构、数据流、权限边界和 OCR/官方连接演进路线。
-- `docs/roadmap.md`：从 v0.2 到 v1.0 的产品路线图。
+- `docs/roadmap.md`：从 v0.2 到 v1.1 的产品路线图。
 
 Hermes 可用 raw URL 安装：
 
@@ -41,14 +41,16 @@ python3 agent/hermes/wechat-social-assistant/scripts/doctor.py
 启动 MCP stdio server：
 
 ```bash
-wsa-mcp
+WSA_ALLOWED_ROOT="$PWD" wsa-mcp
 # 或从源码目录运行
-python3 -m wsa.mcp_server
+WSA_ALLOWED_ROOT="$PWD" python3 -m wsa.mcp_server
 ```
 
-v1.0 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`。其中 `get_capture_observations` 返回每条 OCR 文本的 confidence、归一化 bbox 和低置信度 speaker candidate。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+MCP 会在进程启动时启用路径策略；`db_path`、截图目录和日志路径必须位于 `WSA_ALLOWED_ROOT` 下。OpenClaw 原生插件会从 `allowedRoot` 配置自动传递该变量。
 
-OCR 数据采用两层存储：`captures` 保存一次采集的业务记录，`ocr_observations` 保存每条 OCR 观察的文本、置信度、空间坐标、来源和 speaker 候选；旧数据库升级时会自动按行回填无坐标 observation。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
+v1.1 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`、`list_ocr_reviews`。其中 `get_capture_observations` 返回每条 OCR 文本的 confidence、归一化 bbox 和低置信度 speaker candidate；`list_ocr_reviews` 展示待人工校正的低置信度 observation。写入工具还包括 `record_ocr_review`，必须带 `confirmation_text="review OCR observation"`；其它写入工具仍分别要求 `record local feedback` 和 `confirm relationship candidate`。MCP stdio 进程会把 `db_path`、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+
+OCR 数据采用“原始证据 + 可审计校正”两层存储：`captures` 保存一次采集的业务记录，`ocr_observations` 保存每条 OCR 观察的文本、置信度、空间坐标、来源和 speaker 候选，`ocr_reviews`/`ocr_review_events` 保存用户对低质量 observation 的接受、排除或修正；原始 OCR 不会被覆盖，分析使用 `captures.corrected_text` 的生效文本。数据库通过 `schema_migrations` 显式升级，`wsa backup --yes` 使用 SQLite backup API 生成一致快照。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 快速开始
 
@@ -345,6 +347,31 @@ python3 -m wsa.cli import-obsidian --vault "$HOME/Documents/Obsidian Vault" --ye
 ```bash
 python3 -m wsa.cli weekly-report --date 2026-05-27
 python3 -m wsa.cli weekly-report --out reports/weekly.md
+```
+
+## 数据备份与 OCR 校正
+
+数据库使用 SQLite WAL、5 秒 busy timeout 和显式 schema migration。写入前可以生成一致快照：
+
+```bash
+python3 -m wsa.cli backup --out data/backups/social-$(date +%Y%m%d-%H%M%S).db --yes
+```
+
+截图导入后，如果 Vision confidence 较低，先查看校正队列：
+
+```bash
+python3 -m wsa.cli ocr-review --max-confidence 0.75
+```
+
+人工确认后可以接受、排除或修正一条 observation。原始 `raw_text`、截图和原始 observation 保留不变，修正只写入独立 review 表：
+
+```bash
+python3 -m wsa.cli ocr-review \
+  --observation-id 12 \
+  --action correct \
+  --corrected-text "修正后的聊天内容" \
+  --note "人工核对截图" \
+  --yes
 ```
 
 ## OCR 采集
