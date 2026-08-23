@@ -36,6 +36,7 @@ class AuditAndDataControlTests(unittest.TestCase):
             screenshot_exists_after_delete = screenshot.exists()
 
         self.assertEqual(1, audit.table_counts["captures"])
+        self.assertEqual(1, audit.table_counts["ocr_observations"])
         self.assertEqual(1, audit.table_counts["relationship_sources"])
         self.assertIn("# 本地数据审计", markdown)
         self.assertEqual(export_path, export_result.out_path)
@@ -49,6 +50,7 @@ class AuditAndDataControlTests(unittest.TestCase):
         self.assertTrue(dry_run.dry_run)
         self.assertEqual(1, delete_result.removed_people)
         self.assertEqual(1, delete_result.removed_sources)
+        self.assertEqual(1, delete_result.removed_observations)
         self.assertEqual(1, delete_result.removed_screenshots)
         self.assertFalse(screenshot_exists_after_delete)
         self.assertEqual([], after_delete_sources)
@@ -85,6 +87,55 @@ class AuditAndDataControlTests(unittest.TestCase):
         self.assertEqual(1, result.removed_captures)
         self.assertEqual(0, result.removed_screenshots)
         self.assertTrue(image_exists_after_delete)
+
+    def test_delete_contact_never_removes_an_imported_user_owned_image(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            original = root / "original.png"
+            original.write_bytes(b"user-owned image")
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="王五\n这是从用户文件导入的证据。",
+                contact_hint="王五",
+                source="image",
+                captured_at="2026-05-27T09:00:00+08:00",
+                image_path=str(original),
+                image_managed=False,
+            )
+
+            dry_run = delete_contact_data(db_path, "王五", dry_run=True)
+            result = delete_contact_data(db_path, "王五")
+            original_exists = original.exists()
+
+        self.assertEqual(0, dry_run.removed_screenshots)
+        self.assertEqual(0, result.removed_screenshots)
+        self.assertTrue(original_exists)
+
+    def test_delete_contact_keeps_imported_image_even_inside_captures_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            imported = root / "data" / "captures" / "imported.png"
+            imported.parent.mkdir(parents=True)
+            imported.write_bytes(b"user-owned image")
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="赵六\n用户把这张图放在 captures 目录，但 WSA 不拥有它。",
+                contact_hint="赵六",
+                source="image",
+                captured_at="2026-05-27T09:00:00+08:00",
+                image_path=str(imported),
+                image_managed=False,
+            )
+
+            result = delete_contact_data(db_path, "赵六")
+            imported_exists = imported.exists()
+
+        self.assertEqual(0, result.removed_screenshots)
+        self.assertTrue(imported_exists)
 
 
 def _seed_audit_data(root: Path, db_path: Path) -> None:

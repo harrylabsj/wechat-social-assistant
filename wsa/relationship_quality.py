@@ -237,7 +237,15 @@ def _recency_score(
     as_of: str | None,
     evidence: tuple[EvidenceCitation, ...],
 ) -> QualityScore:
-    days = _days_since(profile.last_seen_at, as_of=as_of)
+    if not profile.last_interaction_at:
+        return QualityScore(
+            name="最近互动",
+            score=0,
+            label="未知",
+            explanation=f"最近一次观察于 {format_display_time(profile.last_seen_at)}，但没有可确认的真实互动时间。",
+            evidence=evidence,
+        )
+    days = _days_since(profile.last_interaction_at, as_of=as_of)
     if days <= 2:
         score = 95
     elif days <= 14:
@@ -252,7 +260,7 @@ def _recency_score(
         name="最近互动",
         score=score,
         label=_recency_label(days),
-        explanation=f"最近出现于 {format_display_time(profile.last_seen_at)}，距分析时间约 {days} 天。",
+        explanation=f"最近互动于 {format_display_time(profile.last_interaction_at)}，距分析时间约 {days} 天。",
         evidence=evidence,
     )
 

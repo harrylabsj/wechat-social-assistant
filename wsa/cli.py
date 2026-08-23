@@ -158,10 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Immediately capture the current screen with hotkey-friendly defaults.",
     )
     quick_capture.add_argument("--contact", help="Contact name hint.")
-    quick_capture.add_argument("--mode", choices=["screen", "window"], default="screen")
+    quick_capture.add_argument("--mode", choices=["screen", "window"], default="window")
     quick_capture.add_argument("--source", default="hotkey")
     quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
-    quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="wechat-chat")
+    quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     quick_capture.set_defaults(func=cmd_quick_capture)
 
     ocr = sub.add_parser("ocr-image", help="Run OCR for an existing image.")
@@ -408,11 +408,11 @@ def build_parser() -> argparse.ArgumentParser:
     watch = sub.add_parser("watch", help="Explicitly watch the frontmost WeChat window and ingest changed OCR text.")
     watch.add_argument("--contact", help="Contact name hint; omit to guess from OCR.")
     watch.add_argument("--interval", type=int, help="Polling interval in seconds. Defaults to saved watch-interval setting.")
-    watch.add_argument("--mode", choices=["screen", "window"], default="screen")
+    watch.add_argument("--mode", choices=["screen", "window"], default="window")
     watch.add_argument("--app", action="append", default=None)
     watch.add_argument("--source", default="watch")
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
-    watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="wechat-chat")
+    watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     watch.add_argument("--quiet-skip-every", type=int, default=30, help="Log repeated skip states every N polls.")
     watch.add_argument("--log-file", type=Path, help="Debug log path. Defaults to DB directory/watch.log.")
     watch.set_defaults(func=cmd_watch)
@@ -434,6 +434,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         source=args.source,
         captured_at=now_iso(),
         image_path=args.image_path,
+        image_managed=False,
     )
     status = "inserted" if result.inserted else "duplicate"
     signals = _format_signal_kinds(result.signal_kinds)
@@ -464,7 +465,9 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             crop=getattr(args, "crop", None),
             crop_preset=getattr(args, "crop_preset", "none"),
         )
-        text = ocr_image(image_path)
+        ocr_result = ocr_image(image_path)
+        text = str(ocr_result)
+        observations = getattr(ocr_result, "observations", None)
         result = ingest_capture(
             args.db,
             raw_text=text,
@@ -472,6 +475,9 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             source=args.source,
             captured_at=now_iso(),
             image_path=str(image_path),
+            image_managed=True,
+            interaction_at=None,
+            observations=observations,
         )
     except (CaptureError, EmptyCaptureError):
         if getattr(args, "command", None) == "watch":
@@ -526,7 +532,9 @@ def cmd_import_image(args: argparse.Namespace) -> int:
     duplicate_count = 0
     image_attached_count = 0
     for image in images:
-        text = ocr_image(image)
+        ocr_result = ocr_image(image)
+        text = str(ocr_result)
+        observations = getattr(ocr_result, "observations", None)
         result = ingest_capture(
             args.db,
             raw_text=text,
@@ -534,6 +542,9 @@ def cmd_import_image(args: argparse.Namespace) -> int:
             source=args.source,
             captured_at=now_iso(),
             image_path=str(image),
+            image_managed=False,
+            interaction_at=None,
+            observations=observations,
         )
         status = "inserted" if result.inserted else "duplicate"
         if result.inserted:
@@ -983,7 +994,7 @@ def cmd_delete_contact(args: argparse.Namespace) -> int:
     print(
         f"{prefix}: contact={result.person_name} "
         f"people={result.removed_people} captures={result.removed_captures} "
-        f"signals={result.removed_signals} feedback={result.removed_feedback} "
+        f"signals={result.removed_signals} observations={result.removed_observations} feedback={result.removed_feedback} "
         f"candidates={result.removed_candidates} enrichments={result.removed_enrichments} "
         f"sources={result.removed_sources} screenshots={result.removed_screenshots}"
     )

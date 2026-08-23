@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wsa.store import EmptyCaptureError, connect, ingest_capture, init_db, reset_memory
+from wsa.observations import OCRObservation
+from wsa.store import EmptyCaptureError, connect, ingest_capture, init_db, list_ocr_observations, reset_memory
 
 
 class StoreTests(unittest.TestCase):
@@ -90,6 +91,95 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("2026-05-27T10:00:00+08:00", capture["captured_at"])
         self.assertEqual("watch", capture["source"])
         self.assertEqual(str(image), capture["image_path"])
+
+    def test_ingest_capture_persists_structured_ocr_observations_and_speaker_candidate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            init_db(db_path)
+            result = ingest_capture(
+                db_path,
+                raw_text="项目交流群（3）\n群成员A\n可以参考一下这家",
+                contact_hint="项目交流群（3）",
+                source="ocr",
+                captured_at="2026-05-27T09:00:00+08:00",
+                interaction_at=None,
+                observations=(
+                    OCRObservation(
+                        text="项目交流群（3）",
+                        confidence=0.99,
+                        bbox_x=0.1,
+                        bbox_y=0.8,
+                        bbox_width=0.2,
+                        bbox_height=0.05,
+                        source="vision",
+                    ),
+                    OCRObservation(
+                        text="群成员A",
+                        confidence=0.9,
+                        bbox_x=0.2,
+                        bbox_y=0.6,
+                        bbox_width=0.1,
+                        bbox_height=0.04,
+                        source="vision",
+                    ),
+                    OCRObservation(
+                        text="可以参考一下这家",
+                        confidence=0.85,
+                        bbox_x=0.2,
+                        bbox_y=0.55,
+                        bbox_width=0.3,
+                        bbox_height=0.04,
+                        source="vision",
+                    ),
+                ),
+            )
+
+            observations = list_ocr_observations(db_path, capture_id=result.capture_id)
+
+        self.assertEqual(3, len(observations))
+        self.assertEqual("vision", observations[1].source)
+        self.assertEqual(0.6, observations[1].bbox_y)
+        self.assertEqual("群成员A", observations[1].speaker_candidate)
+        self.assertEqual(0.55, observations[1].speaker_confidence)
+
+    def test_init_db_backfills_text_observations_for_existing_capture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    create table people (
+                        id integer primary key autoincrement,
+                        name text not null unique,
+                        aliases_json text not null default '[]',
+                        notes text not null default '',
+                        created_at text not null,
+                        updated_at text not null,
+                        last_interaction_at text
+                    );
+                    create table captures (
+                        id integer primary key autoincrement,
+                        person_id integer not null references people(id) on delete cascade,
+                        captured_at text not null,
+                        source text not null,
+                        raw_text text not null,
+                        clean_text text not null,
+                        text_hash text not null,
+                        created_at text not null,
+                        unique(person_id, text_hash)
+                    );
+                    insert into people(name, created_at, updated_at)
+                    values ('张三', '2026-05-27T08:00:00+08:00', '2026-05-27T08:00:00+08:00');
+                    insert into captures(person_id, captured_at, source, raw_text, clean_text, text_hash, created_at)
+                    values (1, '2026-05-27T08:00:00+08:00', 'legacy', '张三\n旧聊天', '旧聊天', 'legacy', '2026-05-27T08:00:00+08:00');
+                    """
+                )
+
+            init_db(db_path)
+            observations = list_ocr_observations(db_path, capture_id=1)
+
+        self.assertEqual(["旧聊天"], [observation.text for observation in observations])
+        self.assertEqual(["legacy"], [observation.source for observation in observations])
 
     def test_duplicate_capture_backfills_missing_signals(self):
         with tempfile.TemporaryDirectory() as tmpdir:

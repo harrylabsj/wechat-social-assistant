@@ -6,6 +6,7 @@
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
+    "openclaw-plugin",
     "openclaw-non-plugin",
     "codex",
     "claude-code"
@@ -37,7 +38,8 @@
       "confirm_relationship_candidate",
       "list_feedback",
       "record_feedback",
-      "list_recent_captures"
+      "list_recent_captures",
+      "get_capture_observations"
     ],
     "resources": [
       "wsa://status",
@@ -58,6 +60,15 @@
       "safe-capture-review"
     ],
     "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'."
+  },
+  "openclaw_plugin": {
+    "manifest": "agent/openclaw/wechat-social-assistant-plugin/openclaw.plugin.json",
+    "package": "agent/openclaw/wechat-social-assistant-plugin/package.json",
+    "entrypoint": "agent/openclaw/wechat-social-assistant-plugin/index.js",
+    "install": "openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin",
+    "enable": "openclaw plugins enable wechat-social-assistant",
+    "default_mode": "read_only",
+    "write_policy": "The plugin exposes read tools by default. Set trustedWrites=true only for a verified local installation; write calls still require the MCP confirmation fields."
   },
   "capabilities": [
     "local_status",
@@ -82,7 +93,8 @@
     "ocr_import",
     "hotkey_shortcuts",
     "watch_interval_settings",
-    "explicit_watch_mode"
+    "explicit_watch_mode",
+    "openclaw_native_plugin"
   ],
   "commands": [
     {
@@ -251,6 +263,8 @@
   "install": {
     "from_repo": "python3 -m pip install git+https://github.com/harrylabsj/wechat-social-assistant.git",
     "from_checkout": "python3 -m pip install -e .",
-    "hermes_skill": "hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes"
+    "hermes_skill": "hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes",
+    "openclaw_plugin": "openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin",
+    "openclaw_skill_fallback": "Copy agent/openclaw/wechat-social-assistant.md into the host skill directory when native plugins are unavailable."
   }
 }

@@ -27,6 +27,8 @@ class WatchLogTests(unittest.TestCase):
         args = build_parser().parse_args(["watch"])
 
         self.assertEqual(["WeChat", "微信"], args.app)
+        self.assertEqual("window", args.mode)
+        self.assertEqual("none", args.crop_preset)
 
     def test_watch_parser_allows_replacing_target_apps(self):
         args = build_parser().parse_args(["watch", "--app", "Comet"])

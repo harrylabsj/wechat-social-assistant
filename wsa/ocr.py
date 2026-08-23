@@ -2,20 +2,54 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
+import os
 from pathlib import Path
 import platform
 import subprocess
 
+from .observations import OCRObservation, observation_from_mapping
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OCR_SOURCE = PROJECT_ROOT / "tools" / "macos_ocr.swift"
-OCR_BINARY = PROJECT_ROOT / "bin" / "macos_ocr"
-FRONTMOST_SOURCE = PROJECT_ROOT / "tools" / "macos_frontmost_app.swift"
-FRONTMOST_BINARY = PROJECT_ROOT / "bin" / "macos_frontmost_app"
+PACKAGE_ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = PROJECT_ROOT / "tools"
+PACKAGED_SOURCE_ROOT = PACKAGE_ROOT / "native"
+OCR_SOURCE = SOURCE_ROOT / "macos_ocr.swift" if (SOURCE_ROOT / "macos_ocr.swift").exists() else PACKAGED_SOURCE_ROOT / "macos_ocr.swift"
+FRONTMOST_SOURCE = (
+    SOURCE_ROOT / "macos_frontmost_app.swift"
+    if (SOURCE_ROOT / "macos_frontmost_app.swift").exists()
+    else PACKAGED_SOURCE_ROOT / "macos_frontmost_app.swift"
+)
+FRONTMOST_WINDOW_SOURCE = (
+    SOURCE_ROOT / "macos_frontmost_window.swift"
+    if (SOURCE_ROOT / "macos_frontmost_window.swift").exists()
+    else PACKAGED_SOURCE_ROOT / "macos_frontmost_window.swift"
+)
+PROJECT_BINARY_ROOT = PROJECT_ROOT / "bin"
+# A source checkout may keep compiled helpers beside ``tools``.  Installed
+# wheels must never try to write into site-packages, so they use a per-user
+# cache instead.
+if (SOURCE_ROOT / "macos_ocr.swift").exists() and os.access(PROJECT_ROOT, os.W_OK):
+    BINARY_ROOT = PROJECT_BINARY_ROOT
+else:
+    BINARY_ROOT = Path.home() / "Library" / "Caches" / "wechat-social-assistant" / "bin"
+OCR_BINARY = BINARY_ROOT / "macos_ocr"
+FRONTMOST_BINARY = BINARY_ROOT / "macos_frontmost_app"
+FRONTMOST_WINDOW_BINARY = BINARY_ROOT / "macos_frontmost_window"
 
 
 class CaptureError(RuntimeError):
     pass
+
+
+class OCRText(str):
+    """String-compatible OCR result carrying structured observations."""
+
+    def __new__(cls, text: str, observations: tuple[OCRObservation, ...] = ()):
+        instance = super().__new__(cls, text)
+        instance.observations = observations
+        return instance
 
 
 @dataclass(frozen=True)
@@ -44,7 +78,10 @@ def capture_screenshot(
     path.parent.mkdir(parents=True, exist_ok=True)
     args = ["screencapture", "-x", "-o"]
     if mode == "window":
-        args.append("-W")
+        # ``-W`` opens an interactive picker and cannot be used safely by a
+        # background watcher. Resolve the already-frontmost WeChat window to
+        # an ID and capture only that window.
+        args.extend(["-l", str(frontmost_window_id())])
     elif mode != "screen":
         raise ValueError("mode must be 'screen' or 'window'")
     args.append(str(path))
@@ -58,11 +95,16 @@ def capture_screenshot(
 
 
 def ocr_image(image_path: Path | str, *, build: bool = True) -> str:
+    observations = ocr_image_observations(image_path, build=build)
+    return OCRText("\n".join(observation.text for observation in observations), observations)
+
+
+def ocr_image_observations(image_path: Path | str, *, build: bool = True) -> tuple[OCRObservation, ...]:
     if platform.system() != "Darwin":
         raise CaptureError("OCR helper currently supports macOS only.")
     binary = ensure_ocr_helper() if build else OCR_BINARY
     if not binary.exists():
-        raise CaptureError("OCR helper is not built. Run: swiftc tools/macos_ocr.swift -o bin/macos_ocr")
+        raise CaptureError(f"OCR helper is not built. Run: swiftc {OCR_SOURCE} -o {OCR_BINARY}")
     result = subprocess.run(
         [str(binary), str(image_path)],
         text=True,
@@ -70,7 +112,33 @@ def ocr_image(image_path: Path | str, *, build: bool = True) -> str:
     )
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "OCR failed")
-    return result.stdout.strip()
+    return _parse_ocr_output(result.stdout)
+
+
+def _parse_ocr_output(output: str) -> tuple[OCRObservation, ...]:
+    observations: list[OCRObservation] = []
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            # Keep compatibility with an older helper binary that printed
+            # plain text lines while the source is being upgraded.
+            observations.append(OCRObservation(text=line, source="vision-legacy", sequence=index))
+            continue
+        if isinstance(payload, dict):
+            observation = observation_from_mapping(payload, source="vision")
+            observations.append(OCRObservation(**{**observation.__dict__, "sequence": index}))
+            continue
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    observations.append(observation_from_mapping(item, source="vision"))
+    return tuple(
+        OCRObservation(**{**observation.__dict__, "sequence": index})
+        for index, observation in enumerate(observations)
+        if observation.text.strip()
+    )
 
 
 def ensure_ocr_helper() -> Path:
@@ -97,6 +165,38 @@ def ensure_frontmost_helper() -> Path:
         if result.returncode != 0:
             raise CaptureError(result.stderr.strip() or "swiftc failed")
     return FRONTMOST_BINARY
+
+
+def ensure_frontmost_window_helper() -> Path:
+    if _needs_build(FRONTMOST_WINDOW_SOURCE, FRONTMOST_WINDOW_BINARY):
+        FRONTMOST_WINDOW_BINARY.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["swiftc", str(FRONTMOST_WINDOW_SOURCE), "-o", str(FRONTMOST_WINDOW_BINARY)],
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise CaptureError(result.stderr.strip() or "swiftc failed")
+    return FRONTMOST_WINDOW_BINARY
+
+
+def frontmost_window_id() -> int:
+    if platform.system() != "Darwin":
+        raise CaptureError("window capture currently supports macOS only.")
+    try:
+        binary = ensure_frontmost_window_helper()
+    except Exception as exc:
+        raise CaptureError(f"frontmost window helper unavailable: {exc}") from exc
+    result = subprocess.run([str(binary)], text=True, capture_output=True)
+    if result.returncode != 0:
+        raise CaptureError(result.stderr.strip() or "frontmost window lookup failed")
+    try:
+        window_id = int(result.stdout.strip())
+    except ValueError as exc:
+        raise CaptureError("frontmost window helper returned an invalid window id") from exc
+    if window_id <= 0:
+        raise CaptureError("frontmost window helper returned an invalid window id")
+    return window_id
 
 
 def next_capture_path(root: Path | str) -> Path:

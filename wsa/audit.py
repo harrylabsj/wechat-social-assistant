@@ -12,6 +12,7 @@ AUDIT_TABLES = (
     "people",
     "captures",
     "capture_signals",
+    "ocr_observations",
     "contact_feedback",
     "relationship_candidates",
     "contact_enrichments",
@@ -40,6 +41,7 @@ class DeleteContactResult:
     removed_people: int
     removed_captures: int
     removed_signals: int
+    removed_observations: int
     removed_feedback: int
     removed_candidates: int
     removed_enrichments: int
@@ -120,7 +122,7 @@ def delete_contact_data(
     if not name:
         raise ValueError("person_name is required")
     with connect(db_path) as conn:
-        impact = _delete_contact_impact(conn, name)
+        impact = _delete_contact_impact(conn, name, managed_root=Path(db_path).expanduser().resolve(strict=False).parent / "captures")
         if not dry_run:
             _delete_contact_rows(conn, name, impact["person_ids"], impact["capture_ids"])
             conn.commit()
@@ -132,6 +134,7 @@ def delete_contact_data(
         removed_people=impact["people"],
         removed_captures=impact["captures"],
         removed_signals=impact["signals"],
+        removed_observations=impact["observations"],
         removed_feedback=impact["feedback"],
         removed_candidates=impact["candidates"],
         removed_enrichments=impact["enrichments"],
@@ -147,6 +150,7 @@ def delete_result_to_dict(result: DeleteContactResult) -> dict[str, Any]:
         "removed_people": result.removed_people,
         "removed_captures": result.removed_captures,
         "removed_signals": result.removed_signals,
+        "removed_observations": result.removed_observations,
         "removed_feedback": result.removed_feedback,
         "removed_candidates": result.removed_candidates,
         "removed_enrichments": result.removed_enrichments,
@@ -167,10 +171,10 @@ def _table_rows(conn, table: str) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(f"select * from {table} order by id").fetchall()]
 
 
-def _delete_contact_impact(conn, name: str) -> dict[str, Any]:
+def _delete_contact_impact(conn, name: str, *, managed_root: Path) -> dict[str, Any]:
     person_ids = [int(row["id"]) for row in conn.execute("select id from people where name = ?", (name,)).fetchall()]
     capture_ids = _capture_ids(conn, person_ids)
-    screenshot_paths = _unshared_capture_image_paths(conn, capture_ids)
+    screenshot_paths = _unshared_capture_image_paths(conn, capture_ids, managed_root=managed_root)
     return {
         "person_ids": person_ids,
         "capture_ids": capture_ids,
@@ -178,6 +182,7 @@ def _delete_contact_impact(conn, name: str) -> dict[str, Any]:
         "people": len(person_ids),
         "captures": len(capture_ids),
         "signals": _count_by_ids(conn, "capture_signals", "capture_id", capture_ids),
+        "observations": _count_by_ids(conn, "ocr_observations", "capture_id", capture_ids),
         "feedback": _count_where(conn, "contact_feedback", "person_name = ?", (name,)),
         "candidates": _count_where(conn, "relationship_candidates", "name = ? or source_chat = ?", (name, name)),
         "enrichments": _count_where(conn, "contact_enrichments", "person_name = ?", (name,)),
@@ -208,13 +213,13 @@ def _capture_ids(conn, person_ids: list[int]) -> list[int]:
     ]
 
 
-def _unshared_capture_image_paths(conn, capture_ids: list[int]) -> list[Path]:
+def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_root: Path) -> list[Path]:
     if not capture_ids:
         return []
     placeholders = ", ".join("?" for _ in capture_ids)
     rows = conn.execute(
         f"""
-        select distinct image_path
+        select distinct image_path, image_managed
         from captures
         where id in ({placeholders})
           and image_path is not null
@@ -224,7 +229,18 @@ def _unshared_capture_image_paths(conn, capture_ids: list[int]) -> list[Path]:
     ).fetchall()
     result: list[Path] = []
     for row in rows:
+        if not bool(row["image_managed"]):
+            # The explicit ownership bit wins over path heuristics. This
+            # protects a user-imported image that happens to live under
+            # data/captures.
+            continue
         image_path = str(row["image_path"])
+        path = Path(image_path).expanduser().resolve(strict=False)
+        try:
+            path.relative_to(managed_root.expanduser().resolve(strict=False))
+        except (OSError, ValueError):
+            # Imported/user-owned images are references, not files managed by WSA.
+            continue
         other_refs = int(
             conn.execute(
                 f"""
@@ -236,7 +252,6 @@ def _unshared_capture_image_paths(conn, capture_ids: list[int]) -> list[Path]:
                 [image_path, *capture_ids],
             ).fetchone()[0]
         )
-        path = Path(image_path)
         if other_refs == 0 and path.is_file():
             result.append(path)
     return result

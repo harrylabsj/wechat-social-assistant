@@ -31,8 +31,8 @@ class ShortcutCommandTests(unittest.TestCase):
         self.assertIn("inserted capture=1 contact=张三", stdout.getvalue())
         args = capture_once.call_args.args[0]
         self.assertEqual(db_path, args.db)
-        self.assertEqual("screen", args.mode)
-        self.assertEqual("wechat-chat", args.crop_preset)
+        self.assertEqual("window", args.mode)
+        self.assertEqual("none", args.crop_preset)
         self.assertEqual("hotkey", args.source)
         self.assertIsNone(args.contact)
 

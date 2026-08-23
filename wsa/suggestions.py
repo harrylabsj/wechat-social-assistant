@@ -110,14 +110,14 @@ def build_suggestions(
 def _speaker_suggestions(db_path: Path | str, *, as_of: datetime, min_score: int) -> list[Suggestion]:
     suggestions: list[Suggestion] = []
     for profile in build_profiles(db_path):
-        if profile.kind != "speaker" or not profile.source_chats:
+        if profile.kind != "speaker" or not profile.source_chats or not profile.last_interaction_at:
             continue
         latest_text, signals, evidence_captured_at = _speaker_signal_context(db_path, profile)
         if not latest_text:
             continue
         suggestion = _suggest_for_person(
             person_name=profile.name,
-            last_interaction_at=profile.last_seen_at,
+            last_interaction_at=profile.last_interaction_at,
             latest_text=latest_text,
             signals=signals,
             as_of=as_of,

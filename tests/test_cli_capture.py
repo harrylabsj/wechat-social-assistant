@@ -45,6 +45,31 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertIn("signals=项目/合作,问题", output)
         self.assertNotIn("signals=project,question", output)
 
+    def test_capture_observation_does_not_claim_a_new_interaction(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            image_path = root / "data" / "captures" / "observed.png"
+
+            with (
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.capture_screenshot"),
+                patch("wsa.cli.ocr_image", return_value="王五\n这是一段被观察到的旧聊天。"),
+                patch("wsa.cli.now_iso", return_value="2026-05-27T10:00:00+08:00"),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    0,
+                    main(["--db", str(db_path), "capture", "--contact", "王五"]),
+                )
+
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                interaction = conn.execute(
+                    "select last_interaction_at from people where name = '王五'"
+                ).fetchone()[0]
+
+        self.assertIsNone(interaction)
+
     def test_capture_removes_new_image_when_ocr_text_is_duplicate(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

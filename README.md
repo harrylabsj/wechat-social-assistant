@@ -13,14 +13,23 @@
 - `agent/agent.json`：通用 agent manifest，描述命令、权限、数据边界和安装方式。
 - `agent/hermes/wechat-social-assistant/SKILL.md`：Hermes Skill，可让 agent 按安全流程调用本地 `wsa`。
 - `agent/hermes/wechat-social-assistant/scripts/doctor.py`：本地自检脚本。
-- `agent/openclaw/wechat-social-assistant.md`：OpenClaw 非插件使用说明。
+- `agent/openclaw/wechat-social-assistant.md`：OpenClaw 插件、MCP 和 Skill fallback 使用说明。
+- `agent/openclaw/wechat-social-assistant-plugin/`：OpenClaw 原生插件，默认只注册读工具，内部复用 MCP。
 - `wsa-mcp` / `python3 -m wsa.mcp_server`：本地优先 MCP server。
+- `docs/architecture.md`：分层架构、数据流、权限边界和 OCR/官方连接演进路线。
 - `docs/roadmap.md`：从 v0.2 到 v1.0 的产品路线图。
 
 Hermes 可用 raw URL 安装：
 
 ```bash
 hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes
+```
+
+OpenClaw 原生插件（版本支持时）：
+
+```bash
+openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin
+openclaw plugins enable wechat-social-assistant
 ```
 
 本地自检：
@@ -37,7 +46,9 @@ wsa-mcp
 python3 -m wsa.mcp_server
 ```
 
-v1.0 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v1.0 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`。其中 `get_capture_observations` 返回每条 OCR 文本的 confidence、归一化 bbox 和低置信度 speaker candidate。写入工具只有 `record_feedback` 和 `confirm_relationship_candidate`，分别必须带 `confirmation_text="record local feedback"` 和 `confirmation_text="confirm relationship candidate"`。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+
+OCR 数据采用两层存储：`captures` 保存一次采集的业务记录，`ocr_observations` 保存每条 OCR 观察的文本、置信度、空间坐标、来源和 speaker 候选；旧数据库升级时会自动按行回填无坐标 observation。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 快速开始
 
@@ -344,7 +355,7 @@ python3 -m wsa.cli weekly-report --out reports/weekly.md
 python3 -m wsa.cli capture --contact 张三 --mode window
 ```
 
-`--mode window` 会调用系统截图的窗口选择模式；你点一下微信聊天窗口即可。`--mode screen` 会截取整个屏幕。
+`--mode window` 会定位当前前台窗口的 window id，只截取该窗口；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。
 截图采集完成后，命令行也会回显 `contact=... person=... signals=... image=...`，其中 `signals` 使用中文关系信号，没有信号时显示 `signals=无`，方便马上判断 OCR 入库是否有效。
 如果 OCR 文本和已有记录重复，`capture/watch` 会显示 `duplicate`；系统会把这次解析出的关系信号补回既有记录，避免旧库漏掉线索。已有记录缺少截图时会把新图片补挂上去并输出 `image_attached=...`，同时把该记录的证据时间、来源和联系人最近出现时间更新为这次截图；已有记录已经有可用截图时才删除这次刚截的新图片并输出 `duplicate_image_removed=...`，避免截图目录被重复画面撑大。
 
@@ -354,7 +365,7 @@ python3 -m wsa.cli capture --contact 张三 --mode window
 python3 -m wsa.cli quick-capture
 ```
 
-`quick-capture` 默认使用 `--mode screen --crop-preset wechat-chat --source hotkey`，等价于“马上抓当前屏幕右侧微信聊天区域并入库”。也可以显式传 `--contact NAME`。
+`quick-capture` 默认使用 `--mode window --crop-preset none --source hotkey`，等价于“马上抓当前前台窗口并入库”。也可以显式传 `--contact NAME`。
 
 扫描间隔可以保存成默认设置：
 
@@ -405,7 +416,7 @@ python3 -m wsa.cli import-image ./phone-screenshots --contact 张三
 如果你希望它在一段时间内自动记录当前前台微信窗口：
 
 ```bash
-python3 -m wsa.cli watch --mode screen
+python3 -m wsa.cli watch
 ```
 
 这会按 `watch-interval` 保存的间隔检查一次前台应用，默认是 60 秒。只有当前台应用名是 `WeChat` 或 `微信` 时才截图、OCR、入库。前台运行时按 `Ctrl-C` 停止；也可以临时用 `--interval 10` 覆盖本次运行。
@@ -425,7 +436,7 @@ python3 -m wsa.cli stop
 
 如果安装后使用命令行入口 `wsa watch` 启动，`status`、`stop-watch` 和 `stop` 也会识别并处理这个进程。
 
-`watch` 默认会使用 `--crop-preset wechat-chat`，只保留微信右侧聊天区域，避免 macOS 菜单栏、Dock、微信左侧会话列表污染 OCR。想关闭裁剪可以显式传：
+`watch` 默认使用前台窗口捕获和 `--crop-preset none`，避免后台任务截取其它应用或重复套用整屏裁剪。只有需要兼容旧的整屏工作流时才显式传：
 
 ```bash
 python3 -m wsa.cli watch --interval 60 --mode screen --crop-preset none

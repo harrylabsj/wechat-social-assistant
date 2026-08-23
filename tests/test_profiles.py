@@ -120,6 +120,11 @@ class ProfileExtractionTests(unittest.TestCase):
         self.assertEqual(["https://example.com/product"], extract_links(lines))
         self.assertEqual(["示例材料.docx"], extract_files(lines))
 
+    def test_extract_speakers_rejects_common_short_topic_labels(self):
+        lines = ["人工智能", "产品方向", "项目资料", "群成员A", "可以参考一下这家"]
+
+        self.assertEqual(["群成员A"], extract_speakers(lines, chat_name="项目交流群（3）"))
+
     def test_important_content_lines_prioritize_actions_over_system_alerts(self):
         lines = [
             "【月之暗面】尊敬的Moonshot开放平台用户，您",

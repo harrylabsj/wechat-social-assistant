@@ -6,6 +6,7 @@ __all__ = [
     "audit",
     "suggestions",
     "ocr",
+    "observations",
     "mcp_server",
     "dashboard",
     "relationship_quality",

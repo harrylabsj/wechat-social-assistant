@@ -32,6 +32,7 @@ class MCPServerContractTests(unittest.TestCase):
                 "list_feedback",
                 "record_feedback",
                 "list_recent_captures",
+                "get_capture_observations",
             ],
             tool_names,
         )
@@ -110,6 +111,7 @@ class MCPServerContractTests(unittest.TestCase):
             candidates = _call_tool("list_relationship_candidates", db_path=db_path, min_confidence=0)
             feedback = _call_tool("list_feedback", db_path=db_path, contact_name="张三")
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
+            observations = _call_tool("get_capture_observations", db_path=db_path, capture_id=1)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
         self.assertIn("audit", audit["structuredContent"])
@@ -137,6 +139,9 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual([], feedback["structuredContent"]["feedback"])
         self.assertEqual(2, len(recent["structuredContent"]["captures"]))
         self.assertEqual("增长交流群（3）", recent["structuredContent"]["captures"][0]["contact_name"])
+        self.assertEqual(1, observations["structuredContent"]["capture_id"])
+        self.assertTrue(observations["structuredContent"]["observations"])
+        self.assertIn("bbox", observations["structuredContent"]["observations"][0])
 
     def test_resources_and_prompts_are_readable(self):
         with tempfile.TemporaryDirectory() as tmpdir:

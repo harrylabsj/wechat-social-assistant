@@ -54,7 +54,7 @@ from .sources import (
     source_to_dict,
 )
 from .status import StatusReport, build_status_report, render_status_report
-from .store import connect, default_db_path
+from .store import connect, default_db_path, list_ocr_observations
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
@@ -291,6 +291,19 @@ MCP_TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "get_capture_observations",
+        "description": "Read structured OCR observations, normalized bounding boxes, confidence, and speaker candidates for one capture.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["capture_id"],
+            "properties": {
+                "capture_id": {"type": "integer", "minimum": 1, "description": "Capture id."},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 MCP_RESOURCES = [
@@ -489,6 +502,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "list_feedback": _tool_list_feedback,
         "record_feedback": _tool_record_feedback,
         "list_recent_captures": _tool_list_recent_captures,
+        "get_capture_observations": _tool_get_capture_observations,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -916,6 +930,36 @@ def _tool_list_recent_captures(arguments: dict[str, Any]) -> dict[str, Any]:
     return _tool_result("\n".join(lines).rstrip() + "\n", {"captures": captures})
 
 
+def _tool_get_capture_observations(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    capture_id = _optional_int(arguments.get("capture_id"))
+    if capture_id is None or capture_id < 1:
+        raise ValueError("get_capture_observations requires a positive capture_id")
+    if not db_path.exists():
+        raise ValueError(f"capture not found: {capture_id}")
+    with connect(db_path) as conn:
+        if conn.execute("select 1 from captures where id = ?", (capture_id,)).fetchone() is None:
+            raise ValueError(f"capture not found: {capture_id}")
+    observations = list_ocr_observations(db_path, capture_id=capture_id)
+    payload = [_observation_to_dict(observation) for observation in observations]
+    lines = [f"# OCR 观察记录 {capture_id}", ""]
+    if not payload:
+        lines.append("暂无结构化 OCR observation。")
+    else:
+        for observation in payload:
+            bbox = observation["bbox"] or "-"
+            speaker = observation["speaker_candidate"] or "-"
+            lines.append(
+                f"- [{observation['sequence']}] {observation['text']} "
+                f"confidence={observation['confidence'] if observation['confidence'] is not None else '-'} "
+                f"bbox={bbox} speaker={speaker}"
+            )
+    return _tool_result(
+        "\n".join(lines) + "\n",
+        {"capture_id": capture_id, "observations": payload},
+    )
+
+
 def _profiles_or_empty(db_path: Path) -> list[ContactProfile]:
     if not db_path.exists():
         return []
@@ -934,7 +978,8 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
     with connect(db_path) as conn:
         rows = conn.execute(
             """
-            select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path, c.clean_text
+            select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path, c.clean_text,
+                   (select count(*) from ocr_observations o where o.capture_id = c.id) as observation_count
             from captures c
             join people p on p.id = c.person_id
             order by c.captured_at desc, c.id desc
@@ -950,6 +995,7 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
             "source": row["source"],
             "image_path": row["image_path"],
             "preview": _preview(row["clean_text"]),
+            "observation_count": int(row["observation_count"]),
         }
         for row in rows
     ]
@@ -1007,6 +1053,7 @@ def _profile_to_dict(profile: ContactProfile) -> dict[str, Any]:
         "kind": profile.kind,
         "source_chats": list(profile.source_chats),
         "last_seen_at": profile.last_seen_at,
+        "last_interaction_at": profile.last_interaction_at,
         "recent_contents": list(profile.recent_contents),
         "speakers": list(profile.speakers),
         "links": list(profile.links),
@@ -1014,6 +1061,28 @@ def _profile_to_dict(profile: ContactProfile) -> dict[str, Any]:
         "identity_hints": list(profile.identity_hints),
         "organizations": list(profile.organizations),
         "signals": list(profile.signals),
+    }
+
+
+def _observation_to_dict(observation) -> dict[str, Any]:
+    bbox = observation.bbox
+    return {
+        "sequence": observation.sequence,
+        "text": observation.text,
+        "confidence": observation.confidence,
+        "bbox": (
+            {
+                "x": bbox[0],
+                "y": bbox[1],
+                "width": bbox[2],
+                "height": bbox[3],
+            }
+            if bbox is not None
+            else None
+        ),
+        "source": observation.source,
+        "speaker_candidate": observation.speaker_candidate,
+        "speaker_confidence": observation.speaker_confidence,
     }
 
 

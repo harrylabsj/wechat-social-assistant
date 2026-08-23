@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
 
 from .enrichment import ContactEnrichment, enrichment_by_person
+from .observations import OCRObservation
 from .parser import TIME_RE, extract_signals, is_noise_line
 from .sources import RelationshipSource, sources_by_person
 from .store import connect
@@ -25,6 +26,8 @@ LATIN_NAME_HINT_RE = re.compile(
 )
 IDENTITY_CONTEXT_RE = re.compile(r"(我是\s*(?!怎么|如何|怎样)|本人|幸会|名片)")
 RELATIVE_TIME_RE = re.compile(r"^(昨天|今天|前天)?\s*\d{1,2}:\d{2}$")
+NON_PERSON_LABELS = {"人工智能", "机器学习", "产品方向", "项目方向", "项目内容", "项目资料"}
+NON_PERSON_SUFFIXES = ("方向", "内容", "资料", "方案", "项目", "工作", "问题", "消息", "时间", "链接", "文件")
 SYMBOL_NOISE_RE = re.compile(r"^[^\w\u4e00-\u9fff]{1,8}$")
 SHORT_OCR_GARBAGE_RE = re.compile(r"^(?=.*[~∞§•])(?=.*\d).{1,8}$")
 SYMBOL_PREFIX_OCR_GARBAGE_RE = re.compile(r"^[§∞•][A-Za-z0-9]?\S{1,12}$")
@@ -77,6 +80,7 @@ class ContactProfile:
     identity_hints: tuple[str, ...] = ()
     organizations: tuple[str, ...] = ()
     signals: tuple[str, ...] = ()
+    last_interaction_at: str | None = None
 
 
 @dataclass
@@ -92,6 +96,7 @@ class _ProfileBuilder:
     identity_hints: list[str] = field(default_factory=list)
     organizations: list[str] = field(default_factory=list)
     signals: set[str] = field(default_factory=set)
+    last_interaction_at: str | None = None
 
     def touch(self, captured_at: str) -> None:
         if not self.last_seen_at or captured_at > self.last_seen_at:
@@ -136,6 +141,7 @@ class _ProfileBuilder:
             identity_hints=tuple(self.identity_hints[-8:]),
             organizations=tuple(self.organizations[-8:]),
             signals=tuple(sorted(self.signals)),
+            last_interaction_at=self.last_interaction_at,
         )
 
 
@@ -143,6 +149,10 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
     builders: dict[tuple[str, str], _ProfileBuilder] = {}
 
     with connect(db_path) as conn:
+        people_interaction = {
+            row["name"]: row["last_interaction_at"]
+            for row in conn.execute("select name, last_interaction_at from people").fetchall()
+        }
         rows = conn.execute(
             """
             select c.id, p.name as chat_name, c.captured_at, c.clean_text
@@ -176,6 +186,7 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
         signal_kinds = {signal.kind for signal in extract_signals("\n".join(content))}
 
         chat_builder = _ensure_builder(builders, chat_name, source_kind)
+        chat_builder.last_interaction_at = people_interaction.get(chat_name)
         chat_builder.touch(captured_at)
         chat_builder.add_recent(content)
         chat_builder.add_links(links)
@@ -194,6 +205,7 @@ def build_profiles(db_path: Path | str, *, limit: int | None = None) -> list[Con
             for speaker in speakers:
                 speaker_links, speaker_files = speaker_artifacts.get(speaker, ([], []))
                 speaker_builder = _ensure_builder(builders, speaker, "speaker")
+                speaker_builder.last_interaction_at = people_interaction.get(speaker)
                 speaker_builder.source_chats.add(chat_name)
                 speaker_builder.touch(captured_at)
                 speaker_builder.add_recent(speaker_messages.get(speaker, content[:3]))
@@ -355,6 +367,34 @@ def extract_speakers(lines: list[str], *, chat_name: str) -> list[str]:
         if _is_speaker_name(candidate, chat_name=chat_name) and is_meaningful_content_line(next_line):
             counts[candidate] += 1
     return sorted(counts, key=lambda name: (-counts[name], name))
+
+
+def annotate_speaker_candidates(
+    observations: tuple[OCRObservation, ...],
+    *,
+    chat_name: str,
+) -> tuple[OCRObservation, ...]:
+    """Attach low-confidence speaker candidates while preserving OCR geometry."""
+
+    if not is_group_chat_name(chat_name):
+        return observations
+    annotated: list[OCRObservation] = []
+    for index, observation in enumerate(observations):
+        candidate = observation.text
+        next_text = observations[index + 1].text if index + 1 < len(observations) else ""
+        if _is_speaker_name(candidate, chat_name=chat_name) and is_meaningful_content_line(next_text):
+            ocr_confidence = observation.confidence if observation.confidence is not None else 0.55
+            speaker_confidence = min(0.55, max(0.0, ocr_confidence))
+            annotated.append(
+                replace(
+                    observation,
+                    speaker_candidate=candidate,
+                    speaker_confidence=speaker_confidence,
+                )
+            )
+        else:
+            annotated.append(observation)
+    return tuple(annotated)
 
 
 def speaker_message_map(lines: list[str], *, chat_name: str) -> dict[str, list[str]]:
@@ -604,6 +644,8 @@ def _is_speaker_name(candidate: str, *, chat_name: str) -> bool:
     if any(mark in candidate for mark in "，。！？?：:"):
         return False
     if len(candidate) > 18:
+        return False
+    if candidate in NON_PERSON_LABELS or candidate.endswith(NON_PERSON_SUFFIXES):
         return False
     if _chinese_char_count(candidate) > 5:
         return False

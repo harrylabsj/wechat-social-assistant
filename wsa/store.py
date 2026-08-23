@@ -8,10 +8,14 @@ from pathlib import Path
 import sqlite3
 
 from .parser import Signal, extract_signals, parse_capture
+from .observations import OCRObservation, normalize_observations
 
 
 class EmptyCaptureError(ValueError):
     pass
+
+
+_AUTO_INTERACTION = object()
 
 
 SCHEMA = """
@@ -34,6 +38,7 @@ create table if not exists captures (
     clean_text text not null,
     text_hash text not null,
     image_path text,
+    image_managed integer not null default 0,
     created_at text not null,
     unique(person_id, text_hash)
 );
@@ -44,6 +49,23 @@ create table if not exists capture_signals (
     kind text not null,
     phrase text not null,
     unique(capture_id, kind)
+);
+
+create table if not exists ocr_observations (
+    id integer primary key autoincrement,
+    capture_id integer not null references captures(id) on delete cascade,
+    sequence integer not null,
+    text text not null,
+    confidence real,
+    bbox_x real,
+    bbox_y real,
+    bbox_width real,
+    bbox_height real,
+    source text not null default 'text',
+    speaker_candidate text,
+    speaker_confidence real,
+    created_at text not null,
+    unique(capture_id, sequence)
 );
 
 create table if not exists contact_feedback (
@@ -105,6 +127,12 @@ on people(last_interaction_at);
 
 create index if not exists idx_captures_person_time
 on captures(person_id, captured_at);
+
+create index if not exists idx_ocr_observations_capture_sequence
+on ocr_observations(capture_id, sequence);
+
+create index if not exists idx_ocr_observations_speaker
+on ocr_observations(speaker_candidate, speaker_confidence);
 
 create index if not exists idx_contact_feedback_person_time
 on contact_feedback(person_name, created_at);
@@ -204,19 +232,32 @@ def ingest_capture(
     source: str = "ocr",
     captured_at: str | None = None,
     image_path: str | None = None,
+    image_managed: bool | None = None,
+    interaction_at: str | None | object = _AUTO_INTERACTION,
+    observations: list[OCRObservation] | tuple[OCRObservation, ...] | None = None,
 ) -> IngestResult:
     init_db(db_path)
     captured_at = captured_at or now_iso()
+    if interaction_at is _AUTO_INTERACTION:
+        interaction_at = captured_at
     parsed = parse_capture(raw_text, contact_hint=contact_hint)
     if not parsed.clean_text.strip():
         raise EmptyCaptureError("empty capture text after OCR cleanup")
+    if image_managed is None:
+        image_managed = _is_managed_capture_path(db_path, image_path)
+    normalized_observations = _prepare_observations(
+        observations,
+        parsed_lines=parsed.lines,
+        source=source,
+        chat_name=parsed.contact_name,
+    )
     text_hash = _hash_text(parsed.clean_text)
     current_time = now_iso()
 
     with connect(db_path) as conn:
         person_id = _ensure_person(conn, parsed.contact_name, current_time)
         existing = conn.execute(
-            "select id, image_path from captures where person_id = ? and text_hash = ?",
+            "select id, image_path, image_managed from captures where person_id = ? and text_hash = ?",
             (person_id, text_hash),
         ).fetchone()
         if existing:
@@ -229,16 +270,18 @@ def ingest_capture(
                         captured_at = ?,
                         source = ?,
                         raw_text = ?,
+                        image_managed = ?,
                         created_at = ?
                     where id = ?
                     """,
-                    (image_path, captured_at, source, raw_text, current_time, int(existing["id"])),
+                    (image_path, captured_at, source, raw_text, int(bool(image_managed)), current_time, int(existing["id"])),
                 )
                 image_attached = True
             if image_attached:
-                _touch_person_interaction(conn, person_id, captured_at, current_time)
+                _touch_person_interaction(conn, person_id, interaction_at, current_time)
             _insert_capture_signals(conn, int(existing["id"]), parsed.signals)
-            _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, captured_at, current_time)
+            _insert_ocr_observations(conn, int(existing["id"]), normalized_observations, current_time)
+            _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, interaction_at, current_time)
             conn.commit()
             return IngestResult(
                 capture_id=int(existing["id"]),
@@ -253,8 +296,8 @@ def ingest_capture(
         cursor = conn.execute(
             """
             insert into captures
-            (person_id, captured_at, source, raw_text, clean_text, text_hash, image_path, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+            (person_id, captured_at, source, raw_text, clean_text, text_hash, image_path, image_managed, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 person_id,
@@ -264,13 +307,15 @@ def ingest_capture(
                 parsed.clean_text,
                 text_hash,
                 image_path,
+                int(bool(image_managed)),
                 current_time,
             ),
         )
         capture_id = int(cursor.lastrowid)
         _insert_capture_signals(conn, capture_id, parsed.signals)
-        _touch_person_interaction(conn, person_id, captured_at, current_time)
-        _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, captured_at, current_time)
+        _insert_ocr_observations(conn, capture_id, normalized_observations, current_time)
+        _touch_person_interaction(conn, person_id, interaction_at, current_time)
+        _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, interaction_at, current_time)
         conn.commit()
 
     return IngestResult(
@@ -346,6 +391,46 @@ def refresh_capture_signals(db_path: Path | str) -> RefreshSignalsResult:
     return RefreshSignalsResult(capture_count=len(captures), signal_count=signal_count)
 
 
+def list_ocr_observations(
+    db_path: Path | str,
+    *,
+    capture_id: int | None = None,
+    limit: int | None = None,
+) -> list[OCRObservation]:
+    """Read structured OCR observations for a capture or the whole database."""
+
+    init_db(db_path)
+    clauses: list[str] = []
+    params: list[object] = []
+    if capture_id is not None:
+        clauses.append("capture_id = ?")
+        params.append(int(capture_id))
+    query = "select * from ocr_observations"
+    if clauses:
+        query += " where " + " and ".join(clauses)
+    query += " order by capture_id, sequence"
+    if limit is not None:
+        query += " limit ?"
+        params.append(max(1, int(limit)))
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        OCRObservation(
+            text=row["text"],
+            confidence=row["confidence"],
+            bbox_x=row["bbox_x"],
+            bbox_y=row["bbox_y"],
+            bbox_width=row["bbox_width"],
+            bbox_height=row["bbox_height"],
+            source=row["source"],
+            speaker_candidate=row["speaker_candidate"],
+            speaker_confidence=row["speaker_confidence"],
+            sequence=row["sequence"],
+        )
+        for row in rows
+    ]
+
+
 def refresh_derived_people(db_path: Path | str) -> RefreshDerivedPeopleResult:
     init_db(db_path)
     current_time = now_iso()
@@ -364,6 +449,9 @@ def refresh_derived_people(db_path: Path | str) -> RefreshDerivedPeopleResult:
                 conn,
                 capture["chat_name"],
                 lines,
+                # Rebuilding derived people is deterministic: retain the
+                # observation timestamp from the source capture, never the
+                # time at which ``analyze`` happens to run.
                 capture["captured_at"],
                 current_time,
             )
@@ -395,9 +483,12 @@ def _ensure_person(
 def _touch_person_interaction(
     conn: sqlite3.Connection,
     person_id: int,
-    captured_at: str,
+    interaction_at: str | None | object,
     current_time: str,
 ) -> None:
+    if interaction_at is None:
+        conn.execute("update people set updated_at = ? where id = ?", (current_time, person_id))
+        return
     conn.execute(
         """
         update people
@@ -408,7 +499,7 @@ def _touch_person_interaction(
             end
         where id = ?
         """,
-        (current_time, captured_at, captured_at, person_id),
+        (current_time, interaction_at, interaction_at, person_id),
     )
 
 
@@ -420,6 +511,54 @@ def _should_attach_duplicate_image(existing_image_path: str | None) -> bool:
 
 def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "captures", "image_path", "text")
+    _ensure_column(conn, "captures", "image_managed", "integer not null default 0")
+    conn.executescript(
+        """
+        create table if not exists ocr_observations (
+            id integer primary key autoincrement,
+            capture_id integer not null references captures(id) on delete cascade,
+            sequence integer not null,
+            text text not null,
+            confidence real,
+            bbox_x real,
+            bbox_y real,
+            bbox_width real,
+            bbox_height real,
+            source text not null default 'text',
+            speaker_candidate text,
+            speaker_confidence real,
+            created_at text not null,
+            unique(capture_id, sequence)
+        );
+        create index if not exists idx_ocr_observations_capture_sequence
+        on ocr_observations(capture_id, sequence);
+        create index if not exists idx_ocr_observations_speaker
+        on ocr_observations(speaker_candidate, speaker_confidence);
+        """
+    )
+    _backfill_ocr_observations(conn)
+
+
+def _backfill_ocr_observations(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        select c.id, c.clean_text, c.source, p.name as chat_name
+        from captures c
+        join people p on p.id = c.person_id
+        where not exists (
+            select 1 from ocr_observations o where o.capture_id = c.id
+        )
+        order by c.id
+        """
+    ).fetchall()
+    for row in rows:
+        observations = _prepare_observations(
+            None,
+            parsed_lines=[line for line in str(row["clean_text"]).splitlines() if line.strip()],
+            source=str(row["source"] or "text"),
+            chat_name=str(row["chat_name"] or ""),
+        )
+        _insert_ocr_observations(conn, int(row["id"]), observations, now_iso())
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -432,20 +571,71 @@ def _ensure_group_speakers(
     conn: sqlite3.Connection,
     chat_name: str,
     lines: list[str],
-    captured_at: str,
+    interaction_at: str | None | object,
     current_time: str,
 ) -> None:
     from .profiles import extract_speakers
 
     for speaker in extract_speakers(lines, chat_name=chat_name):
         speaker_id = _ensure_person(conn, speaker, current_time)
-        _touch_person_interaction(conn, speaker_id, captured_at, current_time)
+        _touch_person_interaction(conn, speaker_id, interaction_at, current_time)
 
 
 def _insert_capture_signals(conn: sqlite3.Connection, capture_id: int, signals: list[Signal]) -> None:
     conn.executemany(
         "insert or ignore into capture_signals (capture_id, kind, phrase) values (?, ?, ?)",
         ((capture_id, signal.kind, signal.phrase) for signal in signals),
+    )
+
+
+def _prepare_observations(
+    observations: list[OCRObservation] | tuple[OCRObservation, ...] | None,
+    *,
+    parsed_lines: list[str],
+    source: str,
+    chat_name: str,
+) -> tuple[OCRObservation, ...]:
+    normalized = normalize_observations(observations, fallback_text=parsed_lines, source=source)
+    if not normalized:
+        return normalized
+    # Keep the spatial observation as the source of truth, then add only a
+    # low-confidence heuristic speaker candidate. This is deliberately not a
+    # confirmed identity; profiles/candidates still apply their own guards.
+    from .profiles import annotate_speaker_candidates
+
+    return annotate_speaker_candidates(normalized, chat_name=chat_name)
+
+
+def _insert_ocr_observations(
+    conn: sqlite3.Connection,
+    capture_id: int,
+    observations: tuple[OCRObservation, ...],
+    current_time: str,
+) -> None:
+    conn.executemany(
+        """
+        insert or ignore into ocr_observations
+        (capture_id, sequence, text, confidence, bbox_x, bbox_y, bbox_width,
+         bbox_height, source, speaker_candidate, speaker_confidence, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                capture_id,
+                int(observation.sequence if observation.sequence is not None else index),
+                observation.text,
+                observation.confidence,
+                observation.bbox_x,
+                observation.bbox_y,
+                observation.bbox_width,
+                observation.bbox_height,
+                observation.source,
+                observation.speaker_candidate,
+                observation.speaker_confidence,
+                current_time,
+            )
+            for index, observation in enumerate(observations)
+        ),
     )
 
 
@@ -459,3 +649,15 @@ def _screenshot_files(path: Path) -> list[Path]:
         return []
     suffixes = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
     return sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
+
+
+def _is_managed_capture_path(db_path: Path | str, image_path: str | None) -> bool:
+    if not image_path:
+        return False
+    try:
+        candidate = Path(image_path).expanduser().resolve(strict=False)
+        root = (Path(db_path).expanduser().resolve(strict=False).parent / "captures").resolve(strict=False)
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
