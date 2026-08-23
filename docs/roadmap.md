@@ -85,3 +85,10 @@
 - Add `wsa capture --mode accessibility`; it stores text without a screenshot and automatically falls back to frontmost-window Vision OCR when AX is unavailable or empty.
 - Expose read-only connector readiness through CLI `wsa connectors`, MCP `get_connector_status`, and OpenClaw `wsa_connector_status`.
 - Keep speaker attribution conservative: AX extraction never invents a speaker; version-specific bubble/participant mapping remains the next perception milestone.
+
+## v1.3 Structured AX Perception - shipped
+
+- Preserve AX role/subrole, parent-child path, depth, and normalized bounds in the structured observation database.
+- Add conservative explicit-label speaker candidates (`姓名:` / `Name:` only) with parent or spatial adjacency evidence; ambiguous rows remain unassigned.
+- Add multi-frame AX de-jitter and occurrence-aware deduplication. `capture`, `quick-capture`, and `watch` default to two frames and record `capture_frames`/`capture_stability`.
+- Expose hierarchy metadata and capture stability through MCP observation/capture payloads; keep plugin and Skill adapters thin.

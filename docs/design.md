@@ -15,7 +15,7 @@ Build a local-first assistant that helps maintain relationships from visible WeC
 
 1. User opens a WeChat conversation.
 2. `wsa connectors` reports window/screen capture availability and Accessibility permission/AX reader readiness.
-3. `wsa capture --contact NAME --mode accessibility` first reads the frontmost app's AX text tree; unavailable or empty AX data automatically falls back to frontmost-window Vision OCR. Both paths store the same structured observation contract.
+3. `wsa capture --contact NAME --mode accessibility` first reads two matching AX frames by default; unavailable, unstable, or empty AX data automatically falls back to frontmost-window Vision OCR. Both paths store the same structured observation contract, including AX hierarchy metadata when available.
 4. `wsa ocr-review` lets the user accept, reject, or correct low-confidence observations without overwriting raw evidence.
 5. `wsa suggest` generates a Markdown follow-up table with reasons and draft messages.
 6. Optional `wsa watch` can run only when explicitly started; it records changed visible text while WeChat is frontmost.
@@ -25,8 +25,8 @@ Build a local-first assistant that helps maintain relationships from visible WeC
 SQLite tables:
 
 - `people`: contact name and last interaction time.
-- `captures`: raw OCR text, clean transcript, image path, source, and stable text hash.
-- `ocr_observations`: one row per OCR line with confidence, normalized bounding box, source, and low-confidence speaker candidate.
+- `captures`: raw OCR text, clean transcript, image path, source, stable text hash, frame count, and perception stability.
+- `ocr_observations`: one row per OCR line with confidence, normalized bounding box, source, AX role/path metadata, and low-confidence speaker candidate.
 - `ocr_reviews` / `ocr_review_events`: user-confirmed OCR review state and append-only review actions; `captures.corrected_text` is the effective analysis text.
 - `capture_signals`: deterministic cues such as schedule, project, birthday, and needs-reply.
 - `schema_migrations`: ordered database migration history.

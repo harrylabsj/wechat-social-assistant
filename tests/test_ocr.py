@@ -5,6 +5,8 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
+from wsa.connectors import TextCapture
+from wsa.observations import OCRObservation
 from wsa.ocr import (
     CropRegion,
     FrontmostAppStatus,
@@ -14,6 +16,7 @@ from wsa.ocr import (
     frontmost_window_id,
     next_capture_path,
     ocr_image,
+    accessibility_text_capture,
     _parse_ocr_output,
     parse_crop_spec,
     resolve_crop_region,
@@ -21,6 +24,21 @@ from wsa.ocr import (
 
 
 class FrontmostAppTests(unittest.TestCase):
+    @patch("wsa.ocr.time.sleep")
+    @patch("wsa.connectors.text_connector")
+    def test_accessibility_text_capture_merges_requested_frames(self, text_connector, sleep):
+        connector = text_connector.return_value
+        connector.read_text.side_effect = [
+            TextCapture("张三\n稳定", (OCRObservation(text="张三"), OCRObservation(text="稳定"))),
+            TextCapture("张三\n稳定", (OCRObservation(text="张三"), OCRObservation(text="稳定"))),
+        ]
+
+        result = accessibility_text_capture(stable_frames=2, stable_interval=0.2)
+
+        self.assertEqual(["张三", "稳定"], [item.text for item in result.observations])
+        self.assertEqual(2, result.frame_count)
+        sleep.assert_called_once_with(0.2)
+
     def test_parse_structured_ocr_output_keeps_confidence_and_bbox(self):
         observations = _parse_ocr_output(
             '{"text":"群成员A","confidence":0.91,"bbox":{"x":0.1,"y":0.2,"width":0.3,"height":0.04},"source":"vision"}\n'

@@ -111,7 +111,7 @@ def export_local_data(db_path: Path | str, *, out_path: Path | str) -> ExportDat
         tables = {table: _table_rows(conn, table) for table in AUDIT_TABLES}
         counts = {table: len(rows) for table, rows in tables.items()}
     payload = {
-        "schema_version": "1.2.0",
+        "schema_version": "1.3.0",
         "generated_at": generated_at,
         "db_path": str(Path(db_path)),
         "tables": tables,

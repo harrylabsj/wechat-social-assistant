@@ -68,18 +68,20 @@ from .sources import (
     source_to_dict,
 )
 from .status import StatusReport, build_status_report, render_status_report
-from .store import connect, default_db_path, list_ocr_observations
+from .store import connect, default_db_path, init_db, list_ocr_observations
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "1.2.0"
-SERVER_SCHEMA_VERSION = "1.2.0"
+SERVER_VERSION = "1.3.0"
+SERVER_SCHEMA_VERSION = "1.3.0"
 MCP_CAPABILITIES = (
     "read_relationship_memory",
     "structured_ocr_observations",
     "ocr_review_queue",
     "accessibility_text_capture",
+    "accessibility_hierarchy_metadata",
+    "multi_frame_capture_stability",
     "confirmed_local_writes",
     "path_policy",
 )
@@ -1139,10 +1141,12 @@ def _suggestions_or_empty(db_path: Path, *, limit: int, min_score: int) -> list[
 def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
     if not db_path.exists():
         return []
+    init_db(db_path)
     with connect(db_path) as conn:
         rows = conn.execute(
             """
             select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path,
+                   c.capture_frames, c.capture_stability,
                    coalesce(c.corrected_text, c.clean_text) as clean_text,
                    (select count(*) from ocr_observations o where o.capture_id = c.id) as observation_count
             from captures c
@@ -1159,6 +1163,8 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
             "captured_at": row["captured_at"],
             "source": row["source"],
             "image_path": row["image_path"],
+            "capture_frames": int(row["capture_frames"] or 1),
+            "capture_stability": float(row["capture_stability"] if row["capture_stability"] is not None else 1.0),
             "preview": _preview(row["clean_text"]),
             "observation_count": int(row["observation_count"]),
         }
@@ -1248,6 +1254,11 @@ def _observation_to_dict(observation) -> dict[str, Any]:
         "source": observation.source,
         "speaker_candidate": observation.speaker_candidate,
         "speaker_confidence": observation.speaker_confidence,
+        "role": observation.role,
+        "subrole": observation.subrole,
+        "node_path": observation.node_path,
+        "parent_path": observation.parent_path,
+        "depth": observation.depth,
     }
 
 

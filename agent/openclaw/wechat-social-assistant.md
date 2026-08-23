@@ -73,7 +73,7 @@ Use WeChat Social Assistant through its native plugin or stdio MCP server. Start
 wsa status
 wsa audit
 wsa connectors
-wsa capture --mode accessibility --contact NAME
+wsa capture --mode accessibility --stable-frames 2 --contact NAME
 wsa backup --out ./data/backups/social.db --yes
 wsa ocr-review --max-confidence 0.75
 wsa dashboard

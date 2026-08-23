@@ -24,6 +24,15 @@ class OCRObservation:
     speaker_candidate: str | None = None
     speaker_confidence: float | None = None
     sequence: int | None = None
+    # Accessibility-only structure is kept alongside the observation so the
+    # relationship layer can make conservative layout decisions without
+    # coupling itself to a particular native reader.  Vision/manual sources
+    # simply leave these fields empty.
+    role: str | None = None
+    subrole: str | None = None
+    node_path: str | None = None
+    parent_path: str | None = None
+    depth: int | None = None
 
     @property
     def bbox(self) -> tuple[float, float, float, float] | None:
@@ -76,6 +85,11 @@ def observation_from_mapping(value: Mapping[str, Any], *, source: str = "text") 
         speaker_candidate=_optional_text(value.get("speaker_candidate")),
         speaker_confidence=_confidence_or_none(value.get("speaker_confidence")),
         sequence=_integer_or_none(value.get("sequence")),
+        role=_optional_text(value.get("role")),
+        subrole=_optional_text(value.get("subrole")),
+        node_path=_optional_text(value.get("node_path", value.get("path"))),
+        parent_path=_optional_text(value.get("parent_path")),
+        depth=_integer_or_none(value.get("depth")),
     )
 
 

@@ -121,6 +121,10 @@ class StoreTests(unittest.TestCase):
                         bbox_width=0.1,
                         bbox_height=0.04,
                         source="vision",
+                        role="AXStaticText",
+                        node_path="0.1.0",
+                        parent_path="0.1",
+                        depth=3,
                     ),
                     OCRObservation(
                         text="可以参考一下这家",
@@ -141,6 +145,43 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(0.6, observations[1].bbox_y)
         self.assertEqual("群成员A", observations[1].speaker_candidate)
         self.assertEqual(0.55, observations[1].speaker_confidence)
+        self.assertEqual("AXStaticText", observations[1].role)
+        self.assertEqual("0.1.0", observations[1].node_path)
+
+    def test_ingest_capture_persists_multi_frame_quality_and_ax_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            result = ingest_capture(
+                db_path,
+                raw_text="张三\n稳定消息",
+                contact_hint="张三",
+                source="accessibility",
+                capture_frames=2,
+                capture_stability=0.75,
+                observations=(
+                    OCRObservation(
+                        text="稳定消息",
+                        confidence=1.0,
+                        source="accessibility",
+                        role="AXStaticText",
+                        subrole="AXTextLine",
+                        node_path="0.2.1",
+                        parent_path="0.2",
+                        depth=4,
+                    ),
+                ),
+            )
+            with connect(db_path) as conn:
+                capture = conn.execute(
+                    "select capture_frames, capture_stability from captures where id = ?",
+                    (result.capture_id,),
+                ).fetchone()
+            stored = list_ocr_observations(db_path, capture_id=result.capture_id)[0]
+
+        self.assertEqual((2, 0.75), tuple(capture))
+        self.assertEqual("AXStaticText", stored.role)
+        self.assertEqual("0.2", stored.parent_path)
+        self.assertEqual(4, stored.depth)
 
     def test_init_db_backfills_text_observations_for_existing_capture(self):
         with tempfile.TemporaryDirectory() as tmpdir:

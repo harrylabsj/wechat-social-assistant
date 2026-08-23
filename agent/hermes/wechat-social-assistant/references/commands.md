@@ -27,7 +27,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v1.2 MCP server exposes read tools: `get_status`, `get_connector_status`, `get_audit_report`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, `list_recent_captures`, `get_capture_observations`, and `list_ocr_reviews`. Write tools are `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`; all require explicit confirmation arguments. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
+The v1.3 MCP server exposes read tools: `get_status`, `get_connector_status`, `get_audit_report`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, `list_recent_captures`, `get_capture_observations`, and `list_ocr_reviews`. Capture payloads include AX hierarchy and multi-frame stability metadata when available. Write tools are `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`; all require explicit confirmation arguments. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
 
 ## Confirm Before Running
 
@@ -44,7 +44,7 @@ The v1.2 MCP server exposes read tools: `get_status`, `get_connector_status`, `g
 - `wsa export-data --out PATH --yes` - writes a local JSON data export.
 - `wsa delete-contact NAME --dry-run` then `--yes` - previews or deletes one contact's local records.
 - `wsa capture --contact NAME --mode window` - captures the frontmost window and runs Vision OCR.
-- `wsa capture --contact NAME --mode accessibility` - reads the frontmost AX text tree first and automatically falls back to window OCR when AX is unavailable or empty.
+- `wsa capture --contact NAME --mode accessibility` - reads two stable AX frames first and automatically falls back to window OCR when AX is unavailable, empty, or unstable. Use `--stable-frames 1` for a single frame.
 - `wsa quick-capture` - immediately captures the current screen with shortcut-friendly defaults.
 - `wsa watch-interval 10` - saves the default polling interval for future `wsa watch` runs that omit `--interval`.
 - `wsa watch --interval 60` - starts explicit foreground WeChat polling.

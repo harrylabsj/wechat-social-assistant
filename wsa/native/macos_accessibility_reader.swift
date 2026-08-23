@@ -23,6 +23,9 @@ struct TextRecord: Encodable {
     let bbox: Bounds?
     let role: String
     let subrole: String?
+    let path: String
+    let parent_path: String?
+    let depth: Int
     let sequence: Int
 }
 
@@ -134,7 +137,7 @@ var sequence = 0
 var visited = Set<String>()
 let maxDepth = 12
 
-func walk(_ element: AXUIElement, depth: Int, path: String) {
+func walk(_ element: AXUIElement, depth: Int, path: String, parentPath: String?) {
     guard depth <= maxDepth else { return }
     let identity = "\(path):\(String(describing: element))"
     guard visited.insert(identity).inserted else { return }
@@ -147,6 +150,9 @@ func walk(_ element: AXUIElement, depth: Int, path: String) {
             bbox: normalizedBounds(element, screen: screen),
             role: role,
             subrole: subrole,
+            path: path,
+            parent_path: parentPath,
+            depth: depth,
             sequence: sequence
         )
         sequence += 1
@@ -156,8 +162,9 @@ func walk(_ element: AXUIElement, depth: Int, path: String) {
         }
     }
     for (index, child) in children(element).enumerated() {
-        walk(child, depth: depth + 1, path: "\(path).\(index)")
+        let childPath = "\(path).\(index)"
+        walk(child, depth: depth + 1, path: childPath, parentPath: path)
     }
 }
 
-walk(appElement, depth: 0, path: "0")
+walk(appElement, depth: 0, path: "0", parentPath: nil)

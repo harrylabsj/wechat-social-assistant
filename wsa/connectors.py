@@ -16,9 +16,11 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
-from typing import Protocol
+from collections import Counter
+from typing import Protocol, Sequence
 
 from .observations import OCRObservation, observation_from_mapping
+from .perception import annotate_accessibility_speakers
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +71,8 @@ class TextCapture:
     source: str = "accessibility"
     app_name: str | None = None
     window_title: str | None = None
+    frame_count: int = 1
+    stability: float = 1.0
 
 
 class CaptureConnector(Protocol):
@@ -279,12 +283,133 @@ def _parse_accessibility_output(output: str) -> TextCapture:
         OCRObservation(**{**observation.__dict__, "sequence": index})
         for index, observation in enumerate(observations)
     )
+    normalized = annotate_accessibility_speakers(normalized)
     return TextCapture(
         text="\n".join(observation.text for observation in normalized),
         observations=normalized,
         app_name=app_name,
         window_title=window_title,
     )
+
+
+def merge_text_captures(
+    captures: Sequence[TextCapture],
+    *,
+    min_stable_frames: int = 2,
+) -> TextCapture:
+    """Keep observations that recur across a short AX capture window.
+
+    Bounds are rounded before matching so harmless sub-pixel layout movement
+    does not create a new message.  Duplicate unbounded messages are tracked
+    by occurrence within each frame, preserving two identical visible lines.
+    If no observation reaches the threshold, the latest frame is returned with
+    ``stability=0`` so the caller can apply its normal empty/fallback policy.
+    """
+
+    if not captures:
+        raise ValueError("at least one text capture is required")
+    if len(captures) == 1:
+        capture = captures[0]
+        return TextCapture(
+            text=capture.text,
+            observations=capture.observations,
+            source=capture.source,
+            app_name=capture.app_name,
+            window_title=capture.window_title,
+            frame_count=max(1, capture.frame_count),
+            stability=capture.stability,
+        )
+
+    threshold = min(max(1, int(min_stable_frames)), len(captures))
+    frame_keys = [_frame_keys(capture.observations) for capture in captures]
+    counts: Counter[tuple[tuple[object, ...], int]] = Counter()
+    for keys in frame_keys:
+        counts.update(set(keys))
+    stable_keys = {key for key, count in counts.items() if count >= threshold}
+
+    latest_index: dict[tuple[tuple[object, ...], int], int] = {}
+    latest_observation: dict[tuple[tuple[object, ...], int], OCRObservation] = {}
+    for frame_index, (capture, keys) in enumerate(zip(captures, frame_keys)):
+        for key, observation in zip(keys, capture.observations):
+            if key not in stable_keys:
+                continue
+            latest_index[key] = frame_index
+            latest_observation[key] = observation
+
+    if not stable_keys:
+        selected = captures[-1]
+        return TextCapture(
+            text=selected.text,
+            observations=selected.observations,
+            source=selected.source,
+            app_name=selected.app_name,
+            window_title=selected.window_title,
+            frame_count=sum(max(1, capture.frame_count) for capture in captures),
+            stability=0.0,
+        )
+
+    # Prefer the latest frame's visual order, then append a stable node which
+    # briefly disappeared from that frame in its most recent known position.
+    ordered_keys: list[tuple[tuple[object, ...], int]] = []
+    for key in frame_keys[-1]:
+        if key in stable_keys and key not in ordered_keys:
+            ordered_keys.append(key)
+    missing_keys = [key for key in stable_keys if key not in ordered_keys]
+    missing_keys.sort(key=lambda key: (latest_index[key], latest_observation[key].sequence or 0))
+    ordered_keys.extend(missing_keys)
+
+    # If a speaker candidate appeared in an earlier stable frame but not the
+    # latest one, retain it as evidence rather than dropping the attribution.
+    merged: list[OCRObservation] = []
+    for key in ordered_keys:
+        observation = latest_observation[key]
+        if not observation.speaker_candidate:
+            for capture, keys in reversed(list(zip(captures, frame_keys))):
+                if key not in keys:
+                    continue
+                earlier = capture.observations[keys.index(key)]
+                if earlier.speaker_candidate:
+                    observation = OCRObservation(
+                        **{
+                            **observation.__dict__,
+                            "speaker_candidate": earlier.speaker_candidate,
+                            "speaker_confidence": earlier.speaker_confidence,
+                        }
+                    )
+                    break
+        merged.append(observation)
+    normalized = tuple(
+        OCRObservation(**{**observation.__dict__, "sequence": index})
+        for index, observation in enumerate(merged)
+    )
+    latest = captures[-1]
+    total_keys = len(set(key for keys in frame_keys for key in keys))
+    stability = len(stable_keys) / total_keys if total_keys else 0.0
+    return TextCapture(
+        text="\n".join(observation.text for observation in normalized),
+        observations=normalized,
+        source=latest.source,
+        app_name=latest.app_name or next((capture.app_name for capture in reversed(captures) if capture.app_name), None),
+        window_title=latest.window_title or next(
+            (capture.window_title for capture in reversed(captures) if capture.window_title), None
+        ),
+        frame_count=sum(max(1, capture.frame_count) for capture in captures),
+        stability=stability,
+    )
+
+
+def _frame_keys(observations: Sequence[OCRObservation]) -> list[tuple[tuple[object, ...], int]]:
+    occurrences: Counter[tuple[object, ...]] = Counter()
+    keys: list[tuple[tuple[object, ...], int]] = []
+    for observation in observations:
+        base = (
+            " ".join(observation.text.split()).casefold(),
+            tuple(round(value, 2) for value in observation.bbox) if observation.bbox is not None else None,
+        )
+        occurrence = occurrences[base]
+        occurrences[base] += 1
+        keys.append((base, occurrence))
+    return keys
 
 
 def _optional_text(value: object) -> str | None:

@@ -19,7 +19,7 @@ class DatabaseMigrationError(RuntimeError):
     """Raised when a database is newer than the running WSA schema."""
 
 _AUTO_INTERACTION = object()
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 SCHEMA = """
@@ -49,6 +49,8 @@ create table if not exists captures (
     text_hash text not null,
     image_path text,
     image_managed integer not null default 0,
+    capture_frames integer not null default 1,
+    capture_stability real not null default 1.0,
     created_at text not null,
     unique(person_id, text_hash)
 );
@@ -74,6 +76,11 @@ create table if not exists ocr_observations (
     source text not null default 'text',
     speaker_candidate text,
     speaker_confidence real,
+    role text,
+    subrole text,
+    node_path text,
+    parent_path text,
+    depth integer,
     created_at text not null,
     unique(capture_id, sequence)
 );
@@ -311,6 +318,8 @@ def ingest_capture(
     captured_at: str | None = None,
     image_path: str | None = None,
     image_managed: bool | None = None,
+    capture_frames: int = 1,
+    capture_stability: float = 1.0,
     interaction_at: str | None | object = _AUTO_INTERACTION,
     observations: list[OCRObservation] | tuple[OCRObservation, ...] | None = None,
 ) -> IngestResult:
@@ -323,6 +332,14 @@ def ingest_capture(
         raise EmptyCaptureError("empty capture text after OCR cleanup")
     if image_managed is None:
         image_managed = _is_managed_capture_path(db_path, image_path)
+    try:
+        capture_frames = max(1, int(capture_frames))
+    except (TypeError, ValueError):
+        capture_frames = 1
+    try:
+        capture_stability = max(0.0, min(1.0, float(capture_stability)))
+    except (TypeError, ValueError):
+        capture_stability = 1.0
     normalized_observations = _prepare_observations(
         observations,
         parsed_lines=parsed.lines,
@@ -349,12 +366,29 @@ def ingest_capture(
                         source = ?,
                         raw_text = ?,
                         image_managed = ?,
+                        capture_frames = ?,
+                        capture_stability = ?,
                         created_at = ?
                     where id = ?
                     """,
-                    (image_path, captured_at, source, raw_text, int(bool(image_managed)), current_time, int(existing["id"])),
+                    (
+                        image_path,
+                        captured_at,
+                        source,
+                        raw_text,
+                        int(bool(image_managed)),
+                        capture_frames,
+                        capture_stability,
+                        current_time,
+                        int(existing["id"]),
+                    ),
                 )
                 image_attached = True
+            elif capture_frames != 1 or capture_stability != 1.0:
+                conn.execute(
+                    "update captures set capture_frames = ?, capture_stability = ? where id = ?",
+                    (capture_frames, capture_stability, int(existing["id"])),
+                )
             if image_attached:
                 _touch_person_interaction(conn, person_id, interaction_at, current_time)
             _insert_capture_signals(conn, int(existing["id"]), parsed.signals)
@@ -374,8 +408,9 @@ def ingest_capture(
         cursor = conn.execute(
             """
             insert into captures
-            (person_id, captured_at, source, raw_text, clean_text, text_hash, image_path, image_managed, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (person_id, captured_at, source, raw_text, clean_text, text_hash, image_path,
+             image_managed, capture_frames, capture_stability, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 person_id,
@@ -386,6 +421,8 @@ def ingest_capture(
                 text_hash,
                 image_path,
                 int(bool(image_managed)),
+                capture_frames,
+                capture_stability,
                 current_time,
             ),
         )
@@ -506,6 +543,11 @@ def list_ocr_observations(
             speaker_candidate=row["speaker_candidate"],
             speaker_confidence=row["speaker_confidence"],
             sequence=row["sequence"],
+            role=row["role"] if "role" in row.keys() else None,
+            subrole=row["subrole"] if "subrole" in row.keys() else None,
+            node_path=row["node_path"] if "node_path" in row.keys() else None,
+            parent_path=row["parent_path"] if "parent_path" in row.keys() else None,
+            depth=row["depth"] if "depth" in row.keys() else None,
         )
         for row in rows
     ]
@@ -611,6 +653,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
     migrations = {
         1: _migration_v1_structured_ocr,
         2: _migration_v2_ocr_reviews,
+        3: _migration_v3_perception_metadata,
     }
     for version in range(current + 1, SCHEMA_VERSION + 1):
         migrations[version](conn)
@@ -638,6 +681,11 @@ def _migration_v1_structured_ocr(conn: sqlite3.Connection) -> None:
             source text not null default 'text',
             speaker_candidate text,
             speaker_confidence real,
+            role text,
+            subrole text,
+            node_path text,
+            parent_path text,
+            depth integer,
             created_at text not null,
             unique(capture_id, sequence)
         );
@@ -678,6 +726,27 @@ def _migration_v2_ocr_reviews(conn: sqlite3.Connection) -> None:
         on ocr_reviews(status, reviewed_at);
         create index if not exists idx_ocr_review_events_observation
         on ocr_review_events(observation_id, created_at);
+        """
+    )
+
+
+def _migration_v3_perception_metadata(conn: sqlite3.Connection) -> None:
+    """Persist AX hierarchy and multi-frame quality without changing text semantics."""
+
+    _ensure_column(conn, "captures", "capture_frames", "integer not null default 1")
+    _ensure_column(conn, "captures", "capture_stability", "real not null default 1.0")
+    for column, definition in (
+        ("role", "text"),
+        ("subrole", "text"),
+        ("node_path", "text"),
+        ("parent_path", "text"),
+        ("depth", "integer"),
+    ):
+        _ensure_column(conn, "ocr_observations", column, definition)
+    conn.executescript(
+        """
+        create index if not exists idx_ocr_observations_node_path
+        on ocr_observations(parent_path, node_path, sequence);
         """
     )
 
@@ -759,8 +828,9 @@ def _insert_ocr_observations(
         """
         insert or ignore into ocr_observations
         (capture_id, sequence, text, confidence, bbox_x, bbox_y, bbox_width,
-         bbox_height, source, speaker_candidate, speaker_confidence, created_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         bbox_height, source, speaker_candidate, speaker_confidence, role,
+         subrole, node_path, parent_path, depth, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
@@ -775,6 +845,11 @@ def _insert_ocr_observations(
                 observation.source,
                 observation.speaker_candidate,
                 observation.speaker_confidence,
+                observation.role,
+                observation.subrole,
+                observation.node_path,
+                observation.parent_path,
+                observation.depth,
                 current_time,
             )
             for index, observation in enumerate(observations)

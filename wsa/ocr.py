@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import time
 
 from .observations import OCRObservation, observation_from_mapping
 
@@ -88,7 +89,7 @@ def capture_screenshot(
     )
 
 
-def accessibility_text_capture():
+def accessibility_text_capture(*, stable_frames: int = 1, stable_interval: float = 0.12):
     """Read the frontmost app's Accessibility text tree.
 
     The return value is a ``TextCapture`` carrying a string-compatible text
@@ -97,10 +98,27 @@ def accessibility_text_capture():
     screenshot OCR when AX is unavailable.
     """
 
-    from .connectors import text_connector
+    from .connectors import merge_text_captures, text_connector
 
     try:
-        return text_connector("accessibility").read_text()
+        frame_count = int(stable_frames)
+    except (TypeError, ValueError) as exc:
+        raise CaptureError("stable_frames must be an integer >= 1") from exc
+    if frame_count < 1:
+        raise CaptureError("stable_frames must be >= 1")
+    try:
+        interval = max(0.0, min(float(stable_interval), 2.0))
+    except (TypeError, ValueError) as exc:
+        raise CaptureError("stable_interval must be a number") from exc
+
+    try:
+        connector = text_connector("accessibility")
+        captures = []
+        for index in range(frame_count):
+            captures.append(connector.read_text())
+            if index + 1 < frame_count and interval:
+                time.sleep(interval)
+        return merge_text_captures(captures, min_stable_frames=frame_count)
     except RuntimeError as exc:
         raise CaptureError(str(exc)) from exc
 

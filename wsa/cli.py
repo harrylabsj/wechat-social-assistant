@@ -185,6 +185,12 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--source", default="ocr")
     capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
+    capture.add_argument(
+        "--stable-frames",
+        type=int,
+        default=2,
+        help="For Accessibility mode, require this many matching frames (default: 2).",
+    )
     capture.set_defaults(func=cmd_capture)
 
     quick_capture = sub.add_parser(
@@ -197,6 +203,12 @@ def build_parser() -> argparse.ArgumentParser:
     quick_capture.add_argument("--source", default="hotkey")
     quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
+    quick_capture.add_argument(
+        "--stable-frames",
+        type=int,
+        default=2,
+        help="For Accessibility mode, require this many matching frames (default: 2).",
+    )
     quick_capture.set_defaults(func=cmd_quick_capture)
 
     ocr = sub.add_parser("ocr-image", help="Run OCR for an existing image.")
@@ -461,6 +473,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--source", default="watch")
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
+    watch.add_argument(
+        "--stable-frames",
+        type=int,
+        default=2,
+        help="For Accessibility mode, require this many matching frames (default: 2).",
+    )
     watch.add_argument("--quiet-skip-every", type=int, default=30, help="Log repeated skip states every N polls.")
     watch.add_argument("--log-file", type=Path, help="Debug log path. Defaults to DB directory/watch.log.")
     watch.set_defaults(func=cmd_watch)
@@ -533,16 +551,28 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
     use_accessibility = args.mode == "accessibility"
     image_path = None if use_accessibility else next_capture_path(root)
+    capture_frames = 1
+    capture_stability = 1.0
     try:
         if use_accessibility:
             try:
-                text_capture = accessibility_text_capture()
+                stable_frames = getattr(args, "stable_frames", 1)
+                if stable_frames < 1:
+                    raise CaptureError("--stable-frames must be >= 1")
+                text_capture = accessibility_text_capture(stable_frames=stable_frames)
                 if not text_capture.text.strip():
                     raise CaptureError("Accessibility text tree is empty")
+                if stable_frames > 1 and float(getattr(text_capture, "stability", 1.0)) <= 0:
+                    raise CaptureError("Accessibility text tree is unstable across frames")
                 text = text_capture.text
                 observations = text_capture.observations
                 source = args.source if args.source != "ocr" else "accessibility"
-                capture_detail = "connector=accessibility"
+                capture_frames = max(1, int(getattr(text_capture, "frame_count", stable_frames)))
+                capture_stability = max(0.0, min(1.0, float(getattr(text_capture, "stability", 1.0))))
+                capture_detail = (
+                    f"connector=accessibility frames={capture_frames} "
+                    f"stability={capture_stability:.2f}"
+                )
             except CaptureError:
                 # AX is preferred when available, but a partially exposed or
                 # untrusted tree must not make capture unusable.  Fall back
@@ -560,6 +590,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                 observations = getattr(ocr_result, "observations", None)
                 source = args.source if args.source not in {"ocr", "accessibility"} else "ocr-fallback"
                 capture_detail = "connector=accessibility->ocr-fallback"
+                capture_frames = 1
+                capture_stability = 1.0
         else:
             assert image_path is not None
             capture_screenshot(
@@ -581,6 +613,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             captured_at=now_iso(),
             image_path=str(image_path) if image_path else None,
             image_managed=bool(image_path),
+            capture_frames=capture_frames,
+            capture_stability=capture_stability,
             interaction_at=None,
             observations=observations,
         )

@@ -87,7 +87,7 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("tools", result["capabilities"])
         self.assertIn("resources", result["capabilities"])
         self.assertIn("prompts", result["capabilities"])
-        self.assertEqual("1.2.0", result["serverInfo"]["schemaVersion"])
+        self.assertEqual("1.3.0", result["serverInfo"]["schemaVersion"])
         self.assertIn("ocr_review_queue", result["serverInfo"]["capabilities"])
         self.assertIn("accessibility_text_capture", result["serverInfo"]["capabilities"])
         self.assertEqual(mcp_server.MCP_TOOLS, tools["result"]["tools"])
