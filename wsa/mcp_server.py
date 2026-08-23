@@ -28,6 +28,7 @@ from .candidates import (
     discover_relationship_candidates,
     render_candidates_markdown,
 )
+from .connectors import connector_statuses
 from .dashboard import (
     build_relationship_dashboard,
     dashboard_to_dict,
@@ -72,12 +73,13 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "1.1.0"
-SERVER_SCHEMA_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
+SERVER_SCHEMA_VERSION = "1.2.0"
 MCP_CAPABILITIES = (
     "read_relationship_memory",
     "structured_ocr_observations",
     "ocr_review_queue",
+    "accessibility_text_capture",
     "confirmed_local_writes",
     "path_policy",
 )
@@ -104,6 +106,14 @@ MCP_TOOLS = [
             "properties": {
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_connector_status",
+        "description": "Read local screen, window, and macOS Accessibility connector availability without capturing or changing data.",
+        "inputSchema": {
+            "type": "object",
             "additionalProperties": False,
         },
     },
@@ -560,6 +570,7 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
     handlers = {
         "get_status": _tool_get_status,
         "get_audit_report": _tool_get_audit_report,
+        "get_connector_status": _tool_get_connector_status,
         "search_contacts": _tool_search_contacts,
         "get_contact_brief": _tool_get_contact_brief,
         "get_next_followup": _tool_get_next_followup,
@@ -688,6 +699,34 @@ def _tool_get_status(arguments: dict[str, Any]) -> dict[str, Any]:
         captures_dir=_optional_path(arguments.get("captures_dir"), base=db_path.parent),
     )
     return _tool_result(render_status_report(report), _status_to_dict(report))
+
+
+def _tool_get_connector_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    statuses = connector_statuses()
+    payload = [
+        {
+            "name": status.name,
+            "available": status.available,
+            "detail": status.detail,
+            "can_capture": status.can_capture,
+            "can_read_text": status.can_read_text,
+        }
+        for status in statuses
+    ]
+    lines = ["# 采集连接器状态", ""]
+    for status in payload:
+        capabilities = []
+        if status["can_capture"]:
+            capabilities.append("capture")
+        if status["can_read_text"]:
+            capabilities.append("read_text")
+        lines.append(
+            f"- {status['name']}: "
+            f"{'available' if status['available'] else 'unavailable'} "
+            f"capabilities={','.join(capabilities) or 'none'} "
+            f"detail={status['detail']}"
+        )
+    return _tool_result("\n".join(lines) + "\n", {"connectors": payload})
 
 
 def _tool_get_audit_report(arguments: dict[str, Any]) -> dict[str, Any]:

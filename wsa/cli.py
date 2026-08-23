@@ -31,7 +31,14 @@ from .enrichment import (
     list_contact_enrichments,
 )
 from .feedback import FEEDBACK_ACTIONS, list_feedback, record_feedback, render_feedback_markdown
-from .ocr import CaptureError, capture_screenshot, frontmost_app_status, next_capture_path, ocr_image
+from .ocr import (
+    CaptureError,
+    accessibility_text_capture,
+    capture_screenshot,
+    frontmost_app_status,
+    next_capture_path,
+    ocr_image,
+)
 from .obsidian_memory import import_obsidian_enrichments
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
@@ -169,9 +176,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--image-path")
     ingest.set_defaults(func=cmd_ingest)
 
-    capture = sub.add_parser("capture", help="Capture screen/window, OCR it, and ingest the text.")
+    capture = sub.add_parser(
+        "capture",
+        help="Capture screen/window with OCR, or read the frontmost Accessibility text tree.",
+    )
     capture.add_argument("--contact", help="Contact name hint.")
-    capture.add_argument("--mode", choices=["screen", "window"], default="window")
+    capture.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     capture.add_argument("--source", default="ocr")
     capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
@@ -183,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Immediately capture the current screen with hotkey-friendly defaults.",
     )
     quick_capture.add_argument("--contact", help="Contact name hint.")
-    quick_capture.add_argument("--mode", choices=["screen", "window"], default="window")
+    quick_capture.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     quick_capture.add_argument("--source", default="hotkey")
     quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
@@ -446,7 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch = sub.add_parser("watch", help="Explicitly watch the frontmost WeChat window and ingest changed OCR text.")
     watch.add_argument("--contact", help="Contact name hint; omit to guess from OCR.")
     watch.add_argument("--interval", type=int, help="Polling interval in seconds. Defaults to saved watch-interval setting.")
-    watch.add_argument("--mode", choices=["screen", "window"], default="window")
+    watch.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     watch.add_argument("--app", action="append", default=None)
     watch.add_argument("--source", default="watch")
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
@@ -521,39 +531,71 @@ def cmd_quick_capture(args: argparse.Namespace) -> int:
 
 def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
-    image_path = next_capture_path(root)
+    use_accessibility = args.mode == "accessibility"
+    image_path = None if use_accessibility else next_capture_path(root)
     try:
-        capture_screenshot(
-            image_path,
-            mode=args.mode,
-            crop=getattr(args, "crop", None),
-            crop_preset=getattr(args, "crop_preset", "none"),
-        )
-        ocr_result = ocr_image(image_path)
-        text = str(ocr_result)
-        observations = getattr(ocr_result, "observations", None)
+        if use_accessibility:
+            try:
+                text_capture = accessibility_text_capture()
+                if not text_capture.text.strip():
+                    raise CaptureError("Accessibility text tree is empty")
+                text = text_capture.text
+                observations = text_capture.observations
+                source = args.source if args.source != "ocr" else "accessibility"
+                capture_detail = "connector=accessibility"
+            except CaptureError:
+                # AX is preferred when available, but a partially exposed or
+                # untrusted tree must not make capture unusable.  Fall back
+                # to the existing frontmost-window Vision OCR path and make
+                # the source explicit in the database.
+                image_path = next_capture_path(root)
+                capture_screenshot(
+                    image_path,
+                    mode="window",
+                    crop=getattr(args, "crop", None),
+                    crop_preset=getattr(args, "crop_preset", "none"),
+                )
+                ocr_result = ocr_image(image_path)
+                text = str(ocr_result)
+                observations = getattr(ocr_result, "observations", None)
+                source = args.source if args.source not in {"ocr", "accessibility"} else "ocr-fallback"
+                capture_detail = "connector=accessibility->ocr-fallback"
+        else:
+            assert image_path is not None
+            capture_screenshot(
+                image_path,
+                mode=args.mode,
+                crop=getattr(args, "crop", None),
+                crop_preset=getattr(args, "crop_preset", "none"),
+            )
+            ocr_result = ocr_image(image_path)
+            text = str(ocr_result)
+            observations = getattr(ocr_result, "observations", None)
+            source = args.source
+            capture_detail = f"image={image_path}"
         result = ingest_capture(
             args.db,
             raw_text=text,
             contact_hint=args.contact,
-            source=args.source,
+            source=source,
             captured_at=now_iso(),
-            image_path=str(image_path),
-            image_managed=True,
+            image_path=str(image_path) if image_path else None,
+            image_managed=bool(image_path),
             interaction_at=None,
             observations=observations,
         )
     except (CaptureError, EmptyCaptureError):
-        if getattr(args, "command", None) == "watch":
+        if image_path is not None and getattr(args, "command", None) == "watch":
             _remove_duplicate_image(image_path)
         raise
     status = "inserted" if result.inserted else "duplicate"
     signals = _format_signal_kinds(result.signal_kinds)
-    image_field = f"image={image_path}"
-    if result.image_attached:
-        image_field = f"image_attached={image_path}"
-    elif not result.inserted and _remove_duplicate_image(image_path):
-        image_field = f"duplicate_image_removed={image_path}"
+    image_field = capture_detail
+    if image_path is not None:
+        if result.image_attached:
+            image_field = f"image_attached={image_path}"
+        elif not result.inserted and _remove_duplicate_image(image_path):
+            image_field = f"duplicate_image_removed={image_path}"
     output_line = (
         f"{status} capture={result.capture_id} contact={result.contact_name} "
         f"person={result.person_id} signals={signals} {image_field}"

@@ -150,6 +150,10 @@ function toolSpec(api, spec, mcpName) {
 
 const READ_TOOLS = [
   {
+    name: 'wsa_connector_status', mcpName: 'get_connector_status', description: 'Read screen/window/Accessibility connector availability without capturing data.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
     name: 'wsa_status', mcpName: 'get_status', description: 'Read local WSA database, capture, and watch status.',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },

@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 AGENT_ID = "wechat-social-assistant"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,7 @@ def _run_checks(root: Path, *, db_path: Path | None, obsidian_vault: Path | None
         _console_script_check(),
         _macos_capture_check(),
         _ocr_source_check(root),
+        _accessibility_source_check(root),
         _watch_process_check(),
     ]
     if db_path is None:
@@ -113,6 +114,15 @@ def _ocr_source_check(root: Path) -> Check:
     if source.exists():
         return Check("ocr_source", "ok", str(source))
     return Check("ocr_source", "warn", "tools/macos_ocr.swift is missing; OCR may not build from this checkout.")
+
+
+def _accessibility_source_check(root: Path) -> Check:
+    source = root / "tools" / "macos_accessibility_reader.swift"
+    if source.exists():
+        if platform.system() == "Darwin":
+            return Check("accessibility_source", "ok", str(source))
+        return Check("accessibility_source", "warn", "AX reader source is present; runtime capture currently targets macOS.")
+    return Check("accessibility_source", "warn", "tools/macos_accessibility_reader.swift is missing; AX capture may not build.")
 
 
 def _watch_process_check() -> Check:

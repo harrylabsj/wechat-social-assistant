@@ -2,7 +2,7 @@
   "schema_version": "2026-08-23",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -25,6 +25,7 @@
     "write_tools_require_confirmation": true,
     "tools": [
       "get_status",
+      "get_connector_status",
       "get_audit_report",
       "search_contacts",
       "get_contact_brief",
@@ -99,7 +100,8 @@
     "openclaw_native_plugin",
     "ocr_review_queue",
     "sqlite_backup_and_migrations",
-    "capture_connector_boundary"
+    "capture_connector_boundary",
+    "accessibility_text_tree_capture"
   ],
   "commands": [
     {
@@ -250,6 +252,12 @@
       "mode": "capture",
       "requires_confirmation": true,
       "example": "python3 -m wsa.cli quick-capture"
+    },
+    {
+      "name": "capture",
+      "mode": "capture",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli capture --mode accessibility --contact NAME"
     },
     {
       "name": "watch-interval",

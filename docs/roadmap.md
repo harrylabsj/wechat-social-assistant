@@ -77,3 +77,11 @@
 - Add `ocr_reviews`/`ocr_review_events`, `wsa ocr-review`, `list_ocr_reviews`, and confirmed `record_ocr_review`.
 - Add a `CaptureConnector` boundary plus macOS Accessibility permission probing; keep Vision OCR as fallback.
 - Extend MCP initialize metadata and OpenClaw/Hermes assets with capability and review contracts.
+
+## v1.2 Accessibility-first Perception - shipped
+
+- Add a native macOS AXUIElement text-tree reader for the frontmost application.
+- Normalize AX text nodes into the existing observation contract with `source=accessibility`, confidence, and screen-relative bounds.
+- Add `wsa capture --mode accessibility`; it stores text without a screenshot and automatically falls back to frontmost-window Vision OCR when AX is unavailable or empty.
+- Expose read-only connector readiness through CLI `wsa connectors`, MCP `get_connector_status`, and OpenClaw `wsa_connector_status`.
+- Keep speaker attribution conservative: AX extraction never invents a speaker; version-specific bubble/participant mapping remains the next perception milestone.

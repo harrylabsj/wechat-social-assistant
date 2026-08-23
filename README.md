@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v1.1）
+## Agent 生态（v1.2）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.1 提供 MCP stdio server、关系质量层、关系驾驶舱、本地反馈闭环、群聊/活动候选人发现、可回读 Obsidian 手工补充的关系知识库、本地多入口关系来源导入、OCR 校正队列，以及本地数据审计、备份、导出和按联系人删除。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.2 在 v1.1 的 MCP、关系质量、关系驾驶舱、反馈闭环、候选人发现、来源导入、OCR 校正、审计和备份基础上，新增 macOS Accessibility AX 文本树读取，并在 AX 不可用或为空时自动回退到窗口截图 + Vision OCR。
 
 仓库提供：
 
@@ -17,7 +17,7 @@
 - `agent/openclaw/wechat-social-assistant-plugin/`：OpenClaw 原生插件，默认只注册读工具，内部复用 MCP。
 - `wsa-mcp` / `python3 -m wsa.mcp_server`：本地优先 MCP server。
 - `docs/architecture.md`：分层架构、数据流、权限边界和 OCR/官方连接演进路线。
-- `docs/roadmap.md`：从 v0.2 到 v1.1 的产品路线图。
+- `docs/roadmap.md`：从 v0.2 到 v1.2 的产品路线图。
 
 Hermes 可用 raw URL 安装：
 
@@ -48,7 +48,7 @@ WSA_ALLOWED_ROOT="$PWD" python3 -m wsa.mcp_server
 
 MCP 会在进程启动时启用路径策略；`db_path`、截图目录和日志路径必须位于 `WSA_ALLOWED_ROOT` 下。OpenClaw 原生插件会从 `allowedRoot` 配置自动传递该变量。
 
-v1.1 暴露的 MCP tools 大部分只读：`get_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`、`list_ocr_reviews`。其中 `get_capture_observations` 返回每条 OCR 文本的 confidence、归一化 bbox 和低置信度 speaker candidate；`list_ocr_reviews` 展示待人工校正的低置信度 observation。写入工具还包括 `record_ocr_review`，必须带 `confirmation_text="review OCR observation"`；其它写入工具仍分别要求 `record local feedback` 和 `confirm relationship candidate`。MCP stdio 进程会把 `db_path`、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v1.2 暴露的 MCP tools 大部分只读：`get_status`、`get_connector_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`、`list_ocr_reviews`。其中 `get_connector_status` 可让通用 Agent 先判断 AX、窗口和整屏连接器是否可用；`get_capture_observations` 返回每条文本的 confidence、归一化 bbox、来源和 speaker candidate；`list_ocr_reviews` 展示待人工校正的低置信度 observation。写入工具还包括 `record_ocr_review`，必须带 `confirmation_text="review OCR observation"`；其它写入工具仍分别要求 `record local feedback` 和 `confirm relationship candidate`。MCP stdio 进程会把 `db_path`、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
 
 OCR 数据采用“原始证据 + 可审计校正”两层存储：`captures` 保存一次采集的业务记录，`ocr_observations` 保存每条 OCR 观察的文本、置信度、空间坐标、来源和 speaker 候选，`ocr_reviews`/`ocr_review_events` 保存用户对低质量 observation 的接受、排除或修正；原始 OCR 不会被覆盖，分析使用 `captures.corrected_text` 的生效文本。数据库通过 `schema_migrations` 显式升级，`wsa backup --yes` 使用 SQLite backup API 生成一致快照。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -381,6 +381,15 @@ python3 -m wsa.cli ocr-review \
 ```bash
 python3 -m wsa.cli capture --contact 张三 --mode window
 ```
+
+如果终端或 Codex 已获 macOS“辅助功能”权限，可以优先读取前台应用公开的 AX 文本树：
+
+```bash
+python3 -m wsa.cli connectors
+python3 -m wsa.cli capture --contact 张三 --mode accessibility
+```
+
+`accessibility` 不保存截图，直接把 AX 文本作为 `source=accessibility` 的结构化 observation 入库；如果权限未授予、控件不暴露文本或文本树为空，会自动使用前台窗口截图 + Vision OCR，并标记为 `source=ocr-fallback`。AX 结果仍需经过联系人提示和人工 OCR review，不能把 UI 文本视为可信指令。
 
 `--mode window` 会定位当前前台窗口的 window id，只截取该窗口；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。
 截图采集完成后，命令行也会回显 `contact=... person=... signals=... image=...`，其中 `signals` 使用中文关系信号，没有信号时显示 `signals=无`，方便马上判断 OCR 入库是否有效。

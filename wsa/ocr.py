@@ -88,6 +88,23 @@ def capture_screenshot(
     )
 
 
+def accessibility_text_capture():
+    """Read the frontmost app's Accessibility text tree.
+
+    The return value is a ``TextCapture`` carrying a string-compatible text
+    payload and structured observations.  It is kept next to the OCR helpers
+    so CLI callers can use the same ingest path and transparently fall back to
+    screenshot OCR when AX is unavailable.
+    """
+
+    from .connectors import text_connector
+
+    try:
+        return text_connector("accessibility").read_text()
+    except RuntimeError as exc:
+        raise CaptureError(str(exc)) from exc
+
+
 def _capture_screenshot_legacy(
     output_path: Path | str,
     *,

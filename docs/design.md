@@ -14,8 +14,8 @@ Build a local-first assistant that helps maintain relationships from visible WeC
 ## Flow
 
 1. User opens a WeChat conversation.
-2. `wsa connectors` reports window/screen capture availability and Accessibility permission.
-3. `wsa capture --contact NAME` captures the frontmost window, OCRs it with macOS Vision, and stores both clean text and structured observations.
+2. `wsa connectors` reports window/screen capture availability and Accessibility permission/AX reader readiness.
+3. `wsa capture --contact NAME --mode accessibility` first reads the frontmost app's AX text tree; unavailable or empty AX data automatically falls back to frontmost-window Vision OCR. Both paths store the same structured observation contract.
 4. `wsa ocr-review` lets the user accept, reject, or correct low-confidence observations without overwriting raw evidence.
 5. `wsa suggest` generates a Markdown follow-up table with reasons and draft messages.
 6. Optional `wsa watch` can run only when explicitly started; it records changed visible text while WeChat is frontmost.

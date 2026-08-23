@@ -48,6 +48,7 @@ If neither native plugins nor MCP are available, install this document as a host
 
 | OpenClaw plugin tool | MCP tool | Default |
 |---|---|---|
+| `wsa_connector_status` | `get_connector_status` | read |
 | `wsa_status` | `get_status` | read |
 | `wsa_contact_brief` | `get_contact_brief` | read |
 | `wsa_next_followup` | `get_next_followup` | read |
@@ -72,6 +73,7 @@ Use WeChat Social Assistant through its native plugin or stdio MCP server. Start
 wsa status
 wsa audit
 wsa connectors
+wsa capture --mode accessibility --contact NAME
 wsa backup --out ./data/backups/social.db --yes
 wsa ocr-review --max-confidence 0.75
 wsa dashboard

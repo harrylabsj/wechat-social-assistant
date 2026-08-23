@@ -1,7 +1,7 @@
 {
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "OpenClaw native bridge to the local-first WeChat Social Assistant MCP server.",
   "skills": [
     "./skills"
@@ -38,6 +38,7 @@
   },
   "contracts": {
     "tools": [
+      "wsa_connector_status",
       "wsa_status",
       "wsa_audit",
       "wsa_search_contacts",

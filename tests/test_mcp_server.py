@@ -19,6 +19,7 @@ class MCPServerContractTests(unittest.TestCase):
             [
                 "get_status",
                 "get_audit_report",
+                "get_connector_status",
                 "search_contacts",
                 "get_contact_brief",
                 "get_next_followup",
@@ -86,8 +87,9 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("tools", result["capabilities"])
         self.assertIn("resources", result["capabilities"])
         self.assertIn("prompts", result["capabilities"])
-        self.assertEqual("1.1.0", result["serverInfo"]["schemaVersion"])
+        self.assertEqual("1.2.0", result["serverInfo"]["schemaVersion"])
         self.assertIn("ocr_review_queue", result["serverInfo"]["capabilities"])
+        self.assertIn("accessibility_text_capture", result["serverInfo"]["capabilities"])
         self.assertEqual(mcp_server.MCP_TOOLS, tools["result"]["tools"])
         self.assertEqual(mcp_server.MCP_PROMPTS, prompts["result"]["prompts"])
         self.assertEqual(mcp_server.MCP_RESOURCES, resources["result"]["resources"])
@@ -149,6 +151,17 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("bbox", observations["structuredContent"]["observations"][0])
         self.assertTrue(reviews["structuredContent"]["reviews"])
         self.assertEqual("pending", reviews["structuredContent"]["reviews"][0]["status"])
+
+    def test_connector_status_is_read_only_and_structured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _call_tool("get_connector_status", db_path=Path(tmpdir) / "data" / "social.db")
+
+        self.assertIn("connectors", result["structuredContent"])
+        self.assertGreaterEqual(
+            {item["name"] for item in result["structuredContent"]["connectors"]},
+            {"macos-window-capture", "macos-screen-capture", "macos-accessibility"},
+        )
+        self.assertIn("# 采集连接器状态", result["content"][0]["text"])
 
     def test_ocr_review_mcp_tool_requires_confirmation_and_updates_capture(self):
         with tempfile.TemporaryDirectory() as tmpdir:

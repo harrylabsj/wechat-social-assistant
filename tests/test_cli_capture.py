@@ -5,11 +5,81 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from wsa.cli import main
+from wsa.ocr import CaptureError
+from wsa.observations import OCRObservation
 
 
 class CaptureCommandTests(unittest.TestCase):
+    def test_accessibility_capture_ingests_structured_text_without_screenshot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            stdout = io.StringIO()
+            text_capture = SimpleNamespace(
+                text="张三\n明天一起吃饭吗？",
+                observations=(
+                    OCRObservation(text="张三", confidence=1.0, source="accessibility", sequence=0),
+                    OCRObservation(text="明天一起吃饭吗？", confidence=1.0, source="accessibility", sequence=1),
+                ),
+            )
+            with (
+                patch("wsa.cli.accessibility_text_capture", return_value=text_capture),
+                patch("wsa.cli.capture_screenshot") as capture_screenshot,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    ["--db", str(db_path), "capture", "--mode", "accessibility", "--contact", "张三"]
+                )
+
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                stored = conn.execute(
+                    "select source, image_path from captures"
+                ).fetchone()
+                observations = conn.execute(
+                    "select text, source, confidence from ocr_observations order by sequence"
+                ).fetchall()
+
+        self.assertEqual(0, exit_code)
+        self.assertFalse(capture_screenshot.called)
+        self.assertEqual(("accessibility", None), stored)
+        self.assertEqual(
+            [("张三", "accessibility", 1.0), ("明天一起吃饭吗？", "accessibility", 1.0)],
+            observations,
+        )
+        self.assertIn("connector=accessibility", stdout.getvalue())
+
+    def test_accessibility_capture_falls_back_to_window_ocr(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            image_path = root / "data" / "captures" / "fallback.png"
+
+            def fake_capture(path, *_args, **_kwargs):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fallback screenshot")
+
+            stdout = io.StringIO()
+            with (
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.accessibility_text_capture", side_effect=CaptureError("AX unavailable")),
+                patch("wsa.cli.capture_screenshot", side_effect=fake_capture),
+                patch("wsa.cli.ocr_image", return_value="张三\nOCR 兜底文本"),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    ["--db", str(db_path), "capture", "--mode", "accessibility", "--contact", "张三"]
+                )
+
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                stored = conn.execute("select source, image_path from captures").fetchone()
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(("ocr-fallback", str(image_path)), stored)
+        self.assertIn("connector=accessibility->ocr-fallback", stdout.getvalue())
+
     def test_capture_prints_person_and_chinese_signal_labels(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

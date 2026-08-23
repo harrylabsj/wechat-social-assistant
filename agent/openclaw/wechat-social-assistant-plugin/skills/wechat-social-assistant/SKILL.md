@@ -17,8 +17,9 @@ Use the `wsa_*` tools exposed by the native plugin when available; otherwise att
 
 ## Workflow
 
-1. Inspect status and audit.
+1. Inspect status, connector readiness, and audit (`wsa_connector_status`, `wsa_status`, `wsa_audit`).
 2. Search or brief the relevant contact, then check dashboard/quality and the next follow-up. When evidence location matters, call `wsa_capture_observations` with a capture id.
 3. For low-confidence OCR, call `wsa_ocr_reviews` first; only call `wsa_record_ocr_review` after explicit confirmation with `confirmation_text="review OCR observation"`.
 4. Present a draft and its evidence; do not send it.
-4. Only after the user confirms, call a write tool with the exact confirmation phrase required by its schema.
+5. If the user confirms a capture, prefer the CLI `wsa capture --mode accessibility`; AX text is local evidence and automatically falls back to window OCR when unavailable.
+6. Only after the user confirms, call a write tool with the exact confirmation phrase required by its schema.

@@ -19,7 +19,7 @@ class AgentPackageTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
-        self.assertEqual("1.1.0", manifest["version"])
+        self.assertEqual("1.2.0", manifest["version"])
         self.assertEqual("python3 -m wsa.cli", manifest["cli"]["entrypoint"])
         self.assertEqual("python3 -m wsa.mcp_server", manifest["mcp"]["command"])
         self.assertEqual("stdio", manifest["mcp"]["transport"])
@@ -32,6 +32,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertFalse(manifest["mcp"]["read_only"])
         self.assertTrue(manifest["mcp"]["write_tools_require_confirmation"])
         self.assertIn("get_audit_report", manifest["mcp"]["tools"])
+        self.assertIn("get_connector_status", manifest["mcp"]["tools"])
         self.assertIn("get_contact_brief", manifest["mcp"]["tools"])
         self.assertIn("get_relationship_quality", manifest["mcp"]["tools"])
         self.assertIn("get_relationship_dashboard", manifest["mcp"]["tools"])
@@ -81,6 +82,7 @@ class AgentPackageTests(unittest.TestCase):
                 "export-obsidian",
                 "import-image",
                 "quick-capture",
+                "capture",
                 "watch-interval",
                 "watch",
                 "stop-watch",
@@ -138,7 +140,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
         payload = json.loads(doctor_result.stdout)
         self.assertEqual("wechat-social-assistant", payload["agent_id"])
-        self.assertEqual("1.1.0", payload["version"])
+        self.assertEqual("1.2.0", payload["version"])
         self.assertIn("checks", payload)
         self.assertIn("cli_importable", {check["id"] for check in payload["checks"]})
         self.assertIn("mcp_importable", {check["id"] for check in payload["checks"]})

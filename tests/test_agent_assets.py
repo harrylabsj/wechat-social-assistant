@@ -23,6 +23,7 @@ class AgentAssetTests(unittest.TestCase):
 
         self.assertEqual("wechat-social-assistant", manifest["id"])
         self.assertIn("wsa_capture_observations", manifest["contracts"]["tools"])
+        self.assertIn("wsa_connector_status", manifest["contracts"]["tools"])
         self.assertIn("wsa_ocr_reviews", manifest["contracts"]["tools"])
         self.assertIn("wsa_record_ocr_review", manifest["contracts"]["tools"])
         self.assertEqual("wechat-social-assistant", package["name"])
@@ -39,6 +40,7 @@ class AgentAssetTests(unittest.TestCase):
             "macos_frontmost_app.swift",
             "macos_frontmost_window.swift",
             "macos_accessibility_probe.swift",
+            "macos_accessibility_reader.swift",
         ):
             self.assertTrue((native_root / name).exists(), name)
 
