@@ -51,7 +51,10 @@ class SecurityAndConnectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             capture_connector("private-db")
         statuses = connector_statuses()
-        self.assertEqual({"macos-window-capture", "macos-screen-capture", "macos-accessibility"}, {item.name for item in statuses})
+        self.assertEqual(
+            {"macos-window-capture", "macos-screencapturekit", "macos-screen-capture", "macos-accessibility"},
+            {item.name for item in statuses},
+        )
         self.assertIsInstance(MacOSAccessibilityConnector().status().detail, str)
         self.assertEqual("macos-accessibility", text_connector().name)
 
@@ -87,6 +90,7 @@ class SecurityAndConnectorTests(unittest.TestCase):
         request = CaptureRequest(Path("/tmp/capture.png"), mode="window", crop_preset="wechat-chat")
         self.assertEqual("window", request.mode)
         self.assertEqual("wechat-chat", request.crop_preset)
+        self.assertEqual("legacy", request.backend)
 
     def test_explicit_accessibility_label_is_conservative_and_attaches_to_message(self):
         observations = (

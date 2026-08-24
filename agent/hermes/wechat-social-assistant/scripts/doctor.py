@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 AGENT_ID = "wechat-social-assistant"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,7 @@ def _run_checks(root: Path, *, db_path: Path | None, obsidian_vault: Path | None
         _macos_capture_check(),
         _ocr_source_check(root),
         _accessibility_source_check(root),
+        _screencapturekit_source_check(root),
         _watch_process_check(),
     ]
     if db_path is None:
@@ -123,6 +124,15 @@ def _accessibility_source_check(root: Path) -> Check:
             return Check("accessibility_source", "ok", str(source))
         return Check("accessibility_source", "warn", "AX reader source is present; runtime capture currently targets macOS.")
     return Check("accessibility_source", "warn", "tools/macos_accessibility_reader.swift is missing; AX capture may not build.")
+
+
+def _screencapturekit_source_check(root: Path) -> Check:
+    source = root / "tools" / "macos_screencapturekit.swift"
+    if source.exists():
+        if platform.system() == "Darwin":
+            return Check("screencapturekit_source", "ok", str(source))
+        return Check("screencapturekit_source", "warn", "ScreenCaptureKit source is present; runtime capture currently targets macOS.")
+    return Check("screencapturekit_source", "warn", "tools/macos_screencapturekit.swift is missing; specified-window capture may not build.")
 
 
 def _watch_process_check() -> Check:

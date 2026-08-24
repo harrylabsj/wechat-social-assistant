@@ -37,12 +37,18 @@ ACCESSIBILITY_READER_SOURCE = (
     if (SOURCE_ROOT / "macos_accessibility_reader.swift").exists()
     else PACKAGED_SOURCE_ROOT / "macos_accessibility_reader.swift"
 )
+SCREEN_CAPTURE_KIT_SOURCE = (
+    SOURCE_ROOT / "macos_screencapturekit.swift"
+    if (SOURCE_ROOT / "macos_screencapturekit.swift").exists()
+    else PACKAGED_SOURCE_ROOT / "macos_screencapturekit.swift"
+)
 if (SOURCE_ROOT / "macos_ocr.swift").exists() and os.access(PROJECT_ROOT, os.W_OK):
     BINARY_ROOT = PROJECT_ROOT / "bin"
 else:
     BINARY_ROOT = Path.home() / "Library" / "Caches" / "wechat-social-assistant" / "bin"
 ACCESSIBILITY_BINARY = BINARY_ROOT / "macos_accessibility_probe"
 ACCESSIBILITY_READER_BINARY = BINARY_ROOT / "macos_accessibility_reader"
+SCREEN_CAPTURE_KIT_BINARY = BINARY_ROOT / "macos_screencapturekit"
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,7 @@ class CaptureRequest:
     mode: str = "window"
     crop: str | None = None
     crop_preset: str = "none"
+    backend: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,15 @@ class MacOSWindowCaptureConnector:
     name = "macos-window-capture"
 
     def capture(self, request: CaptureRequest) -> Path:
+        if request.backend in {"auto", "screencapturekit"}:
+            kit = MacOSScreenCaptureKitConnector()
+            if request.backend == "screencapturekit" or kit.status().available:
+                try:
+                    return kit.capture(request)
+                except RuntimeError:
+                    if request.backend == "screencapturekit":
+                        raise
+
         from .ocr import _capture_screenshot_legacy
 
         return _capture_screenshot_legacy(
@@ -130,6 +146,66 @@ class MacOSWindowCaptureConnector:
 
     def read_text(self) -> TextCapture:
         raise RuntimeError("window capture connector does not expose a text tree")
+
+
+class MacOSScreenCaptureKitConnector:
+    """Capture the frontmost app window through ScreenCaptureKit.
+
+    The native helper deliberately selects a concrete shareable window rather
+    than recording the entire desktop.  The connector is opt-in at the API
+    level and used automatically by CLI callers when the permission and
+    helper are available; all failures retain the legacy fallback path.
+    """
+
+    name = "macos-screencapturekit"
+
+    def capture(self, request: CaptureRequest) -> Path:
+        if platform.system() != "Darwin":
+            raise RuntimeError("ScreenCaptureKit currently supports macOS only")
+        try:
+            binary = ensure_screen_capture_kit()
+            result = subprocess.run(
+                [str(binary), str(request.output_path)],
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"ScreenCaptureKit unavailable: {exc}") from exc
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "ScreenCaptureKit capture failed")
+        path = Path(request.output_path)
+        if not path.exists() or path.stat().st_size == 0:
+            raise RuntimeError("ScreenCaptureKit returned no image")
+        from .ocr import resolve_crop_region, crop_image
+
+        region = resolve_crop_region(path, crop=request.crop, crop_preset=request.crop_preset)
+        if region:
+            crop_image(path, region)
+        return path
+
+    def status(self) -> ConnectorStatus:
+        if platform.system() != "Darwin":
+            return ConnectorStatus(self.name, False, "requires macOS Screen Recording", can_capture=False)
+        try:
+            binary = ensure_screen_capture_kit()
+            result = subprocess.run([str(binary), "--status"], text=True, capture_output=True, timeout=5)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            return ConnectorStatus(self.name, False, f"ScreenCaptureKit helper unavailable: {exc}")
+        trusted = result.returncode == 0 and result.stdout.strip().lower() == "trusted"
+        if trusted:
+            return ConnectorStatus(
+                self.name,
+                True,
+                "Screen Recording permission granted; specified-window capture available",
+                can_capture=True,
+            )
+        return ConnectorStatus(
+            self.name,
+            False,
+            result.stderr.strip() or "Screen Recording permission not granted",
+            can_capture=False,
+        )
 
 
 class MacOSAccessibilityConnector:
@@ -194,6 +270,7 @@ def text_connector(mode: str = "accessibility") -> CaptureConnector:
 def connector_statuses() -> tuple[ConnectorStatus, ...]:
     return (
         MacOSWindowCaptureConnector().status(),
+        MacOSScreenCaptureKitConnector().status(),
         MacOSScreenCaptureConnector().status(),
         MacOSAccessibilityConnector().status(),
     )
@@ -235,6 +312,25 @@ def ensure_accessibility_reader() -> Path:
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "swiftc failed")
     return ACCESSIBILITY_READER_BINARY
+
+
+def ensure_screen_capture_kit() -> Path:
+    if platform.system() != "Darwin":
+        raise RuntimeError("ScreenCaptureKit currently supports macOS only")
+    if not SCREEN_CAPTURE_KIT_SOURCE.exists():
+        raise RuntimeError(f"ScreenCaptureKit source missing: {SCREEN_CAPTURE_KIT_SOURCE}")
+    if _needs_build(SCREEN_CAPTURE_KIT_SOURCE, SCREEN_CAPTURE_KIT_BINARY):
+        SCREEN_CAPTURE_KIT_BINARY.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["swiftc", "-parse-as-library", str(SCREEN_CAPTURE_KIT_SOURCE), "-o", str(SCREEN_CAPTURE_KIT_BINARY)],
+            text=True,
+            capture_output=True,
+            timeout=45,
+            env=_swift_compile_env(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "swiftc failed")
+    return SCREEN_CAPTURE_KIT_BINARY
 
 
 def _parse_accessibility_output(output: str) -> TextCapture:

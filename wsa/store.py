@@ -19,7 +19,7 @@ class DatabaseMigrationError(RuntimeError):
     """Raised when a database is newer than the running WSA schema."""
 
 _AUTO_INTERACTION = object()
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 SCHEMA = """
@@ -53,6 +53,23 @@ create table if not exists captures (
     capture_stability real not null default 1.0,
     created_at text not null,
     unique(person_id, text_hash)
+);
+
+-- A perception run records how the raw evidence was acquired.  It is kept
+-- separate from the derived relationship tables so a later model/parser can
+-- be rerun without pretending that the inferred facts were observed facts.
+create table if not exists perception_runs (
+    id integer primary key autoincrement,
+    capture_id integer not null unique references captures(id) on delete cascade,
+    connector text not null default 'unknown',
+    backend text not null default 'unknown',
+    status text not null default 'completed' check(status in ('pending', 'completed', 'fallback', 'failed')),
+    frame_count integer not null default 1,
+    stability real not null default 1.0,
+    started_at text,
+    completed_at text,
+    error text,
+    created_at text not null
 );
 
 create table if not exists capture_signals (
@@ -105,6 +122,46 @@ create table if not exists ocr_review_events (
     corrected_speaker text,
     note text not null default '',
     created_at text not null
+);
+
+create table if not exists message_candidates (
+    id integer primary key autoincrement,
+    capture_id integer not null references captures(id) on delete cascade,
+    observation_id integer not null unique references ocr_observations(id) on delete cascade,
+    message_text text not null,
+    speaker_candidate text,
+    speaker_confidence real,
+    status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+    evidence_excerpt text not null default '',
+    created_at text not null,
+    updated_at text not null
+);
+
+create table if not exists participant_mentions (
+    id integer primary key autoincrement,
+    capture_id integer not null references captures(id) on delete cascade,
+    observation_id integer references ocr_observations(id) on delete cascade,
+    participant_name text not null,
+    confidence real not null default 0.0,
+    status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+    evidence_excerpt text not null default '',
+    created_at text not null,
+    updated_at text not null,
+    unique(capture_id, observation_id, participant_name)
+);
+
+create table if not exists relation_events (
+    id integer primary key autoincrement,
+    capture_id integer not null references captures(id) on delete cascade,
+    person_id integer references people(id) on delete cascade,
+    event_type text not null,
+    confidence real not null default 0.0,
+    status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+    evidence_excerpt text not null default '',
+    occurred_at text,
+    created_at text not null,
+    updated_at text not null,
+    unique(capture_id, event_type, evidence_excerpt)
 );
 
 create table if not exists contact_feedback (
@@ -193,6 +250,21 @@ on relationship_sources(person_name, occurred_at);
 
 create index if not exists idx_relationship_sources_type_time
 on relationship_sources(source_type, occurred_at);
+
+create index if not exists idx_perception_runs_status
+on perception_runs(status, completed_at);
+
+create index if not exists idx_message_candidates_status
+on message_candidates(status, updated_at);
+
+create index if not exists idx_participant_mentions_name_status
+on participant_mentions(participant_name, status, updated_at);
+
+create index if not exists idx_relation_events_person_time
+on relation_events(person_id, occurred_at);
+
+create index if not exists idx_relation_events_status
+on relation_events(status, occurred_at);
 
 create unique index if not exists idx_relationship_sources_unique
 on relationship_sources(person_name, source_type, title, ifnull(occurred_at, ''), text_hash);
@@ -322,6 +394,9 @@ def ingest_capture(
     capture_stability: float = 1.0,
     interaction_at: str | None | object = _AUTO_INTERACTION,
     observations: list[OCRObservation] | tuple[OCRObservation, ...] | None = None,
+    perception_connector: str | None = None,
+    capture_backend: str | None = None,
+    perception_status: str = "completed",
 ) -> IngestResult:
     init_db(db_path)
     captured_at = captured_at or now_iso()
@@ -393,6 +468,19 @@ def ingest_capture(
                 _touch_person_interaction(conn, person_id, interaction_at, current_time)
             _insert_capture_signals(conn, int(existing["id"]), parsed.signals)
             _insert_ocr_observations(conn, int(existing["id"]), normalized_observations, current_time)
+            _insert_perception_artifacts(
+                conn,
+                int(existing["id"]),
+                person_id=person_id,
+                captured_at=captured_at,
+                connector=perception_connector or source,
+                backend=capture_backend or ("manual" if source == "manual" else "unknown"),
+                status=perception_status,
+                frame_count=capture_frames,
+                stability=capture_stability,
+                current_time=current_time,
+                error=None,
+            )
             _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, interaction_at, current_time)
             conn.commit()
             return IngestResult(
@@ -429,6 +517,19 @@ def ingest_capture(
         capture_id = int(cursor.lastrowid)
         _insert_capture_signals(conn, capture_id, parsed.signals)
         _insert_ocr_observations(conn, capture_id, normalized_observations, current_time)
+        _insert_perception_artifacts(
+            conn,
+            capture_id,
+            person_id=person_id,
+            captured_at=captured_at,
+            connector=perception_connector or source,
+            backend=capture_backend or ("manual" if source == "manual" else "unknown"),
+            status=perception_status,
+            frame_count=capture_frames,
+            stability=capture_stability,
+            current_time=current_time,
+            error=None,
+        )
         _touch_person_interaction(conn, person_id, interaction_at, current_time)
         _ensure_group_speakers(conn, parsed.contact_name, parsed.lines, interaction_at, current_time)
         conn.commit()
@@ -654,6 +755,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
         1: _migration_v1_structured_ocr,
         2: _migration_v2_ocr_reviews,
         3: _migration_v3_perception_metadata,
+        4: _migration_v4_evidence_and_derived_facts,
     }
     for version in range(current + 1, SCHEMA_VERSION + 1):
         migrations[version](conn)
@@ -749,6 +851,101 @@ def _migration_v3_perception_metadata(conn: sqlite3.Connection) -> None:
         on ocr_observations(parent_path, node_path, sequence);
         """
     )
+
+
+def _create_evidence_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        create table if not exists perception_runs (
+            id integer primary key autoincrement,
+            capture_id integer not null unique references captures(id) on delete cascade,
+            connector text not null default 'unknown',
+            backend text not null default 'unknown',
+            status text not null default 'completed' check(status in ('pending', 'completed', 'fallback', 'failed')),
+            frame_count integer not null default 1,
+            stability real not null default 1.0,
+            started_at text,
+            completed_at text,
+            error text,
+            created_at text not null
+        );
+        create table if not exists message_candidates (
+            id integer primary key autoincrement,
+            capture_id integer not null references captures(id) on delete cascade,
+            observation_id integer not null unique references ocr_observations(id) on delete cascade,
+            message_text text not null,
+            speaker_candidate text,
+            speaker_confidence real,
+            status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+            evidence_excerpt text not null default '',
+            created_at text not null,
+            updated_at text not null
+        );
+        create table if not exists participant_mentions (
+            id integer primary key autoincrement,
+            capture_id integer not null references captures(id) on delete cascade,
+            observation_id integer references ocr_observations(id) on delete cascade,
+            participant_name text not null,
+            confidence real not null default 0.0,
+            status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+            evidence_excerpt text not null default '',
+            created_at text not null,
+            updated_at text not null,
+            unique(capture_id, observation_id, participant_name)
+        );
+        create table if not exists relation_events (
+            id integer primary key autoincrement,
+            capture_id integer not null references captures(id) on delete cascade,
+            person_id integer references people(id) on delete cascade,
+            event_type text not null,
+            confidence real not null default 0.0,
+            status text not null default 'candidate' check(status in ('candidate', 'confirmed', 'rejected')),
+            evidence_excerpt text not null default '',
+            occurred_at text,
+            created_at text not null,
+            updated_at text not null,
+            unique(capture_id, event_type, evidence_excerpt)
+        );
+        create index if not exists idx_perception_runs_status
+        on perception_runs(status, completed_at);
+        create index if not exists idx_message_candidates_status
+        on message_candidates(status, updated_at);
+        create index if not exists idx_participant_mentions_name_status
+        on participant_mentions(participant_name, status, updated_at);
+        create index if not exists idx_relation_events_person_time
+        on relation_events(person_id, occurred_at);
+        create index if not exists idx_relation_events_status
+        on relation_events(status, occurred_at);
+        """
+    )
+
+
+def _migration_v4_evidence_and_derived_facts(conn: sqlite3.Connection) -> None:
+    """Split acquisition evidence from reviewable derived relationship facts."""
+
+    _create_evidence_tables(conn)
+
+    # Existing captures were already ingested before the split.  Backfill
+    # candidates conservatively from the persisted OCR observations/signals;
+    # all backfilled rows remain ``candidate`` and require review before they
+    # can be treated as confirmed relationship facts.
+    rows = conn.execute(
+        "select id, person_id, captured_at, source, capture_frames, capture_stability from captures order by id"
+    ).fetchall()
+    for row in rows:
+        _insert_perception_artifacts(
+            conn,
+            int(row["id"]),
+            person_id=int(row["person_id"]),
+            captured_at=str(row["captured_at"]),
+            connector=str(row["source"] or "unknown"),
+            backend="legacy",
+            status="completed",
+            frame_count=int(row["capture_frames"] or 1),
+            stability=float(row["capture_stability"] if row["capture_stability"] is not None else 1.0),
+            current_time=now_iso(),
+            error=None,
+        )
 
 
 def _backfill_ocr_observations(conn: sqlite3.Connection) -> None:
@@ -854,6 +1051,101 @@ def _insert_ocr_observations(
             )
             for index, observation in enumerate(observations)
         ),
+    )
+
+
+def _insert_perception_artifacts(
+    conn: sqlite3.Connection,
+    capture_id: int,
+    *,
+    person_id: int,
+    captured_at: str,
+    connector: str,
+    backend: str,
+    status: str,
+    frame_count: int,
+    stability: float,
+    current_time: str,
+    error: str | None,
+) -> None:
+    """Persist provenance plus reviewable candidates for one capture.
+
+    ``ocr_observations`` and ``capture_signals`` remain the immutable-ish raw
+    extraction layer.  The tables written here are explicitly candidate
+    state: downstream agents may confirm or reject them without rewriting the
+    original OCR evidence.
+    """
+
+    allowed_statuses = {"pending", "completed", "fallback", "failed"}
+    run_status = status if status in allowed_statuses else "completed"
+    conn.execute(
+        """
+        insert into perception_runs
+        (capture_id, connector, backend, status, frame_count, stability,
+         started_at, completed_at, error, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(capture_id) do update set
+            connector = excluded.connector,
+            backend = excluded.backend,
+            status = excluded.status,
+            frame_count = excluded.frame_count,
+            stability = excluded.stability,
+            completed_at = excluded.completed_at,
+            error = excluded.error
+        """,
+        (
+            capture_id,
+            connector or "unknown",
+            backend or "unknown",
+            run_status,
+            max(1, int(frame_count)),
+            max(0.0, min(1.0, float(stability))),
+            captured_at,
+            current_time if run_status != "pending" else None,
+            error,
+            current_time,
+        ),
+    )
+
+    conn.execute(
+        """
+        insert or ignore into message_candidates
+        (capture_id, observation_id, message_text, speaker_candidate,
+         speaker_confidence, status, evidence_excerpt, created_at, updated_at)
+        select capture_id, id, text, speaker_candidate, speaker_confidence,
+               'candidate', text, ?, ?
+        from ocr_observations
+        where capture_id = ?
+        """,
+        (current_time, current_time, capture_id),
+    )
+    conn.execute(
+        """
+        insert or ignore into participant_mentions
+        (capture_id, observation_id, participant_name, confidence, status,
+         evidence_excerpt, created_at, updated_at)
+        select capture_id, id, speaker_candidate,
+               coalesce(speaker_confidence, 0.0), 'candidate', text, ?, ?
+        from ocr_observations
+        where capture_id = ?
+          and speaker_candidate is not null
+          and trim(speaker_candidate) != ''
+        """,
+        (current_time, current_time, capture_id),
+    )
+    # Signals are derived from cleaned text but still useful as relation-event
+    # candidates.  Keep them tied to the capture/person so deleting a contact
+    # removes the corresponding derived facts via foreign-key cascades.
+    conn.execute(
+        """
+        insert or ignore into relation_events
+        (capture_id, person_id, event_type, confidence, status,
+         evidence_excerpt, occurred_at, created_at, updated_at)
+        select capture_id, ?, kind, 0.5, 'candidate', phrase, ?, ?, ?
+        from capture_signals
+        where capture_id = ?
+        """,
+        (person_id, captured_at, current_time, current_time, capture_id),
     )
 
 

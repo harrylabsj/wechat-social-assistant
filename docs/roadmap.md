@@ -92,3 +92,11 @@
 - Add conservative explicit-label speaker candidates (`姓名:` / `Name:` only) with parent or spatial adjacency evidence; ambiguous rows remain unassigned.
 - Add multi-frame AX de-jitter and occurrence-aware deduplication. `capture`, `quick-capture`, and `watch` default to two frames and record `capture_frames`/`capture_stability`.
 - Expose hierarchy metadata and capture stability through MCP observation/capture payloads; keep plugin and Skill adapters thin.
+
+## v1.4 Evidence, Window Capture, and Privacy Controls - shipped
+
+- Add privacy-safe AX fixtures and a repeatable `wsa benchmark perception` baseline for text precision/recall, explicit speaker attribution, and multi-frame stability.
+- Add a ScreenCaptureKit native helper that filters to the frontmost application's concrete window; `--capture-backend auto` falls back to the legacy `screencapture -l` path when Screen Recording permission or the helper is unavailable.
+- Upgrade SQLite schema to v4 with `perception_runs`, `message_candidates`, `participant_mentions`, and `relation_events`; raw OCR evidence remains separate from candidate/confirmed/rejected derived facts.
+- Add MCP `get_perception_diagnostics`, `capture_preview`/`capture_commit`, `list_evidence_candidates`, privacy policy, retention purge, and encrypted-backup tools with exact confirmation text for mutations.
+- Make JSON export redacted by default, add deterministic phone/email/URL redaction, 90-day retention preview/purge, managed-image ownership checks, and OpenSSL AES-256-CBC + PBKDF2 encrypted backups.

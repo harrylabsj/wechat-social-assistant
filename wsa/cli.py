@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import json
 from pathlib import Path
 import re
 import sqlite3
@@ -20,6 +21,12 @@ from .candidates import (
     discover_relationship_candidates,
     render_candidates_markdown,
     sync_relationship_candidates,
+)
+from .benchmark import (
+    DEFAULT_FIXTURE_DIR,
+    benchmark_report_to_dict,
+    render_perception_benchmark,
+    run_perception_benchmark,
 )
 from .connectors import connector_statuses
 from .dashboard import build_relationship_dashboard, render_relationship_dashboard_markdown
@@ -41,6 +48,13 @@ from .ocr import (
 )
 from .obsidian_memory import import_obsidian_enrichments
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
+from .privacy import (
+    DEFAULT_PASSPHRASE_ENV,
+    DEFAULT_RETENTION_DAYS,
+    PrivacyPolicy,
+    encrypted_backup_database,
+    purge_expired_captures,
+)
 from .relationship_quality import build_relationship_quality_cards, render_relationship_quality_markdown
 from .reviews import (
     REVIEW_CONFIRMATION_TEXT,
@@ -163,10 +177,31 @@ def build_parser() -> argparse.ArgumentParser:
     backup = sub.add_parser("backup", help="Create a consistent local SQLite backup.")
     backup.add_argument("--out", type=Path, help="Backup path. Defaults to data/backups/social-<timestamp>.db.")
     backup.add_argument("--yes", action="store_true", help="Confirm writing the backup file.")
+    backup.add_argument("--encrypt", action="store_true", help="Encrypt the backup with OpenSSL AES-256-CBC.")
+    backup.add_argument(
+        "--passphrase-env",
+        default=DEFAULT_PASSPHRASE_ENV,
+        help=f"Environment variable containing the backup passphrase (default: {DEFAULT_PASSPHRASE_ENV}).",
+    )
     backup.set_defaults(func=cmd_backup)
 
     connectors = sub.add_parser("connectors", help="Show available capture and Accessibility connectors.")
     connectors.set_defaults(func=cmd_connectors)
+
+    benchmark = sub.add_parser("benchmark", help="Run deterministic local perception benchmarks.")
+    benchmark_sub = benchmark.add_subparsers(dest="benchmark_name", required=True)
+    perception_benchmark = benchmark_sub.add_parser(
+        "perception",
+        help="Evaluate AX parsing, speaker attribution, and multi-frame stability fixtures.",
+    )
+    perception_benchmark.add_argument(
+        "--fixtures",
+        type=Path,
+        default=DEFAULT_FIXTURE_DIR,
+        help="Directory containing privacy-safe perception fixture manifests.",
+    )
+    perception_benchmark.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    perception_benchmark.set_defaults(func=cmd_benchmark_perception)
 
     ingest = sub.add_parser("ingest", help="Ingest OCR/manual text into the relationship memory.")
     ingest.add_argument("--contact", help="Contact name hint. Recommended for early MVP use.")
@@ -186,6 +221,12 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     capture.add_argument(
+        "--capture-backend",
+        choices=["auto", "screencapturekit", "legacy"],
+        default="auto",
+        help="Window capture backend. auto prefers ScreenCaptureKit and falls back to screencapture.",
+    )
+    capture.add_argument(
         "--stable-frames",
         type=int,
         default=2,
@@ -203,6 +244,12 @@ def build_parser() -> argparse.ArgumentParser:
     quick_capture.add_argument("--source", default="hotkey")
     quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
+    quick_capture.add_argument(
+        "--capture-backend",
+        choices=["auto", "screencapturekit", "legacy"],
+        default="auto",
+        help="Window capture backend. auto prefers ScreenCaptureKit and falls back to screencapture.",
+    )
     quick_capture.add_argument(
         "--stable-frames",
         type=int,
@@ -375,7 +422,23 @@ def build_parser() -> argparse.ArgumentParser:
     export_data = sub.add_parser("export-data", help="Export local database tables to a JSON file.")
     export_data.add_argument("--out", type=Path, required=True)
     export_data.add_argument("--yes", action="store_true", help="Required to write the export file.")
+    export_data.add_argument(
+        "--raw",
+        action="store_true",
+        help="Preserve raw text/URLs in the export. The default is deterministic redaction.",
+    )
     export_data.set_defaults(func=cmd_export_data)
+
+    privacy = sub.add_parser("privacy", help="Inspect privacy policy or purge expired local capture evidence.")
+    privacy_sub = privacy.add_subparsers(dest="privacy_action", required=True)
+    privacy_policy = privacy_sub.add_parser("policy", help="Show the default local retention and redaction policy.")
+    privacy_policy.set_defaults(func=cmd_privacy_policy)
+    privacy_purge = privacy_sub.add_parser("purge", help="Preview or delete captures older than the retention window.")
+    privacy_purge.add_argument("--retention-days", type=int, default=DEFAULT_RETENTION_DAYS)
+    privacy_purge.add_argument("--as-of", help="Reference ISO timestamp; defaults to now.")
+    privacy_purge.add_argument("--dry-run", action="store_true", help="Preview only (default).")
+    privacy_purge.add_argument("--yes", action="store_true", help="Confirm deletion of expired local evidence.")
+    privacy_purge.set_defaults(func=cmd_privacy_purge)
 
     delete_contact = sub.add_parser("delete-contact", help="Delete one contact and related local records.")
     delete_contact.add_argument("contact")
@@ -474,6 +537,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     watch.add_argument(
+        "--capture-backend",
+        choices=["auto", "screencapturekit", "legacy"],
+        default="auto",
+        help="Window capture backend. auto prefers ScreenCaptureKit and falls back to screencapture.",
+    )
+    watch.add_argument(
         "--stable-frames",
         type=int,
         default=2,
@@ -495,13 +564,23 @@ def cmd_backup(args: argparse.Namespace) -> int:
     if not args.yes:
         raise SystemExit("Use --yes to write a consistent SQLite backup.")
     target = args.out or _default_backup_path(args.db)
+    if args.encrypt and args.out is None:
+        target = target.with_name(target.name + ".enc")
     try:
         version = schema_version(args.db)
-        backup_database(args.db, target)
-    except (FileExistsError, FileNotFoundError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        if args.encrypt:
+            encrypted_backup_database(
+                args.db,
+                target,
+                passphrase_env=args.passphrase_env,
+            )
+        else:
+            backup_database(args.db, target)
+    except (FileExistsError, FileNotFoundError, OSError, sqlite3.DatabaseError, ValueError, RuntimeError) as exc:
         print(f"backup error: {exc}", file=sys.stderr)
         return 2
-    print(f"backup={target} schema={version}")
+    encrypted = " encrypted=yes" if args.encrypt else " encrypted=no"
+    print(f"backup={target} schema={version}{encrypted}")
     return 0
 
 
@@ -515,6 +594,15 @@ def cmd_connectors(args: argparse.Namespace) -> int:
         capability = ",".join(flags) or "none"
         print(f"{status.name}: {'available' if status.available else 'unavailable'} capabilities={capability} detail={status.detail}")
     return 0
+
+
+def cmd_benchmark_perception(args: argparse.Namespace) -> int:
+    report = run_perception_benchmark(args.fixtures)
+    if args.json:
+        print(json.dumps(benchmark_report_to_dict(report), ensure_ascii=False, indent=2))
+    else:
+        print(render_perception_benchmark(report), end="")
+    return 0 if report.passed else 1
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
@@ -553,6 +641,9 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     image_path = None if use_accessibility else next_capture_path(root)
     capture_frames = 1
     capture_stability = 1.0
+    perception_connector = "manual"
+    perception_backend = "manual"
+    perception_status = "completed"
     try:
         if use_accessibility:
             try:
@@ -573,6 +664,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                     f"connector=accessibility frames={capture_frames} "
                     f"stability={capture_stability:.2f}"
                 )
+                perception_connector = "macos-accessibility"
+                perception_backend = "accessibility"
             except CaptureError:
                 # AX is preferred when available, but a partially exposed or
                 # untrusted tree must not make capture unusable.  Fall back
@@ -584,6 +677,7 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                     mode="window",
                     crop=getattr(args, "crop", None),
                     crop_preset=getattr(args, "crop_preset", "none"),
+                    backend=getattr(args, "capture_backend", "legacy"),
                 )
                 ocr_result = ocr_image(image_path)
                 text = str(ocr_result)
@@ -592,6 +686,9 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                 capture_detail = "connector=accessibility->ocr-fallback"
                 capture_frames = 1
                 capture_stability = 1.0
+                perception_connector = "macos-window-capture"
+                perception_backend = getattr(args, "capture_backend", "legacy")
+                perception_status = "fallback"
         else:
             assert image_path is not None
             capture_screenshot(
@@ -599,12 +696,15 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                 mode=args.mode,
                 crop=getattr(args, "crop", None),
                 crop_preset=getattr(args, "crop_preset", "none"),
+                backend=getattr(args, "capture_backend", "legacy"),
             )
             ocr_result = ocr_image(image_path)
             text = str(ocr_result)
             observations = getattr(ocr_result, "observations", None)
             source = args.source
             capture_detail = f"image={image_path}"
+            perception_connector = "macos-window-capture" if args.mode == "window" else "macos-screen-capture"
+            perception_backend = getattr(args, "capture_backend", "legacy")
         result = ingest_capture(
             args.db,
             raw_text=text,
@@ -617,6 +717,9 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             capture_stability=capture_stability,
             interaction_at=None,
             observations=observations,
+            perception_connector=perception_connector,
+            capture_backend=perception_backend,
+            perception_status=perception_status,
         )
     except (CaptureError, EmptyCaptureError):
         if image_path is not None and getattr(args, "command", None) == "watch":
@@ -1166,9 +1269,38 @@ def cmd_audit(args: argparse.Namespace) -> int:
 def cmd_export_data(args: argparse.Namespace) -> int:
     if not args.yes:
         raise SystemExit("Use --yes to export local data to a file.")
-    result = export_local_data(args.db, out_path=args.out)
+    result = export_local_data(args.db, out_path=args.out, redact=not args.raw)
     tables = _audit_table_summary(result.table_counts)
-    print(f"exported local data: out={result.out_path} {tables}")
+    mode = "raw" if args.raw else "redacted"
+    print(f"exported local data: out={result.out_path} mode={mode} {tables}")
+    return 0
+
+
+def cmd_privacy_policy(args: argparse.Namespace) -> int:
+    policy = PrivacyPolicy()
+    print(
+        f"retention_days={policy.retention_days} "
+        f"redact_exports={str(policy.redact_exports).lower()} "
+        f"managed_images={str(policy.managed_images).lower()} "
+        f"encrypted_backups={str(policy.encrypted_backups).lower()}"
+    )
+    return 0
+
+
+def cmd_privacy_purge(args: argparse.Namespace) -> int:
+    if not args.dry_run and not args.yes:
+        raise SystemExit("Use --dry-run to preview, or --yes to delete expired local evidence.")
+    result = purge_expired_captures(
+        args.db,
+        retention_days=args.retention_days,
+        as_of=args.as_of,
+        dry_run=args.dry_run,
+    )
+    prefix = "dry-run" if result.dry_run else "purged"
+    print(
+        f"{prefix}: cutoff={result.cutoff} matched_captures={result.matched_captures} "
+        f"removed_captures={result.removed_captures} removed_screenshots={result.removed_screenshots}"
+    )
     return 0
 
 

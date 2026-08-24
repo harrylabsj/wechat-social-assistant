@@ -13,7 +13,7 @@
 ## Data Audit, Export, And Delete
 
 1. Run `wsa audit` to inspect table counts and local paths.
-2. To back up or migrate, confirm the output path and run `wsa export-data --out PATH --yes`.
+2. To back up or migrate, confirm the output path and run `wsa export-data --out PATH --yes` (redacted by default), or set `WSA_BACKUP_PASSPHRASE` and run `wsa backup --encrypt --yes` for an encrypted SQLite snapshot.
 3. To delete one contact, run `wsa delete-contact NAME --dry-run` first.
 4. If the impact is expected, run `wsa delete-contact NAME --yes`.
 5. Re-run `wsa audit` to verify counts changed as expected.

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic privacy-safe AX fixtures for deterministic regression checks.",
+  "cases": [
+    {
+      "id": "explicit-label-with-transient-node",
+      "frames": [
+        [
+          {"kind": "meta", "app_name": "WeChat", "window_title": "Synthetic Group"},
+          {"kind": "text", "text": "张三:", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.72, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.4.0", "parent_path": "0.4", "depth": 4},
+          {"kind": "text", "text": "明天聊项目吗？", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.62, "width": 0.30, "height": 0.06}, "role": "AXStaticText", "path": "0.4.1", "parent_path": "0.4", "depth": 4},
+          {"kind": "text", "text": "正在输入", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.54, "width": 0.20, "height": 0.04}, "role": "AXStaticText", "path": "0.4.2", "parent_path": "0.4", "depth": 4}
+        ],
+        [
+          {"kind": "meta", "app_name": "WeChat", "window_title": "Synthetic Group"},
+          {"kind": "text", "text": "张三:", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.72, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.4.0", "parent_path": "0.4", "depth": 4},
+          {"kind": "text", "text": "明天聊项目吗？", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.62, "width": 0.30, "height": 0.06}, "role": "AXStaticText", "path": "0.4.1", "parent_path": "0.4", "depth": 4}
+        ]
+      ],
+      "expected": {
+        "texts": ["张三:", "明天聊项目吗？"],
+        "stable_texts": ["张三:", "明天聊项目吗？"],
+        "speaker_by_text": {"明天聊项目吗？": "张三"}
+      }
+    },
+    {
+      "id": "jittered-bounds-and-duplicate-lines",
+      "frames": [
+        [
+          {"kind": "text", "text": "好的", "confidence": 1.0, "bbox": {"x": 0.10, "y": 0.42, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.5.0", "parent_path": "0.5", "depth": 5},
+          {"kind": "text", "text": "好的", "confidence": 1.0, "bbox": {"x": 0.10, "y": 0.34, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.5.1", "parent_path": "0.5", "depth": 5},
+          {"kind": "text", "text": "稳定行", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.26, "width": 0.20, "height": 0.04}, "role": "AXStaticText", "path": "0.5.2", "parent_path": "0.5", "depth": 5}
+        ],
+        [
+          {"kind": "text", "text": "好的", "confidence": 1.0, "bbox": {"x": 0.101, "y": 0.42, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.5.0", "parent_path": "0.5", "depth": 5},
+          {"kind": "text", "text": "好的", "confidence": 1.0, "bbox": {"x": 0.101, "y": 0.34, "width": 0.12, "height": 0.04}, "role": "AXStaticText", "path": "0.5.1", "parent_path": "0.5", "depth": 5},
+          {"kind": "text", "text": "稳定行", "confidence": 1.0, "bbox": {"x": 0.20, "y": 0.26, "width": 0.20, "height": 0.04}, "role": "AXStaticText", "path": "0.5.2", "parent_path": "0.5", "depth": 5}
+        ]
+      ],
+      "expected": {
+        "texts": ["好的", "好的", "稳定行"],
+        "stable_texts": ["好的", "好的", "稳定行"],
+        "speaker_by_text": {}
+      }
+    }
+  ]
+}

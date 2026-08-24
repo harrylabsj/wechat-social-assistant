@@ -17,6 +17,9 @@ const WRITE_TOOL_NAMES = new Set([
   'wsa_record_feedback',
   'wsa_confirm_relationship_candidate',
   'wsa_record_ocr_review',
+  'wsa_capture_commit',
+  'wsa_purge_expired_captures',
+  'wsa_create_encrypted_backup',
 ]);
 
 function capturedToolSpecs(api, forceWrites = false) {

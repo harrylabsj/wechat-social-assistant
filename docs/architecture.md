@@ -1,6 +1,6 @@
 # WeChat Social Assistant 架构设计
 
-状态：`v1.3` 本地优先基线（2026-08-24）
+状态：`v1.4` 本地优先基线（2026-08-24）
 
 ## 1. 目标与边界
 
@@ -21,9 +21,9 @@ flowchart LR
     Plugin[OpenClaw 原生 Plugin\n薄适配，仅转发 MCP]
     MCP[MCP stdio\n结构化 tools/resources/prompts]
     CLI[CLI / Python API\n显式命令与回归测试]
-    Capture[感知适配层\nAX 文本树 + 窗口截图 + Vision OCR]
+    Capture[感知适配层\nAX + ScreenCaptureKit + 窗口截图 + Vision OCR]
     Core[本地关系引擎\n解析、去重、信号、建议、质量]
-    Store[(SQLite\nWAL + migrations + review queue)]
+    Store[(SQLite\nWAL + migrations + evidence/facts split)]
     Files[(本地 captures/reports\n用户提供的来源文件)]
 
     Host --> Skill
@@ -104,26 +104,58 @@ ocr_observations(
 )
 ```
 
+v1.4 又把“采集运行”和“模型/规则推导”拆成独立表：
+
+```text
+perception_runs(
+  id, capture_id, connector, backend, status,
+  frame_count, stability, started_at, completed_at, error, created_at
+)
+
+message_candidates(
+  id, capture_id, observation_id, message_text,
+  speaker_candidate, speaker_confidence, status, evidence_excerpt,
+  created_at, updated_at
+)
+
+participant_mentions(
+  id, capture_id, observation_id, participant_name,
+  confidence, status, evidence_excerpt, created_at, updated_at
+)
+
+relation_events(
+  id, capture_id, person_id, event_type, confidence, status,
+  evidence_excerpt, occurred_at, created_at, updated_at
+)
+```
+
+`ocr_observations`、`capture_signals` 是采集/解析证据；新表里的
+`candidate`、`confirmed`、`rejected` 是可审计的派生事实生命周期。一次采集会生成一个
+`perception_runs`，并把 observation、speaker candidate 和 signal materialize 成候选，
+不会覆盖原始 OCR。删除 capture 通过外键级联删除对应候选；通用 Agent 可用 MCP
+`list_evidence_candidates` 读取候选，但候选确认仍必须经过用户确认。
+
 坐标使用 Vision/AX 共用的 0..1 归一化坐标（左下角为原点），`speaker_candidate` 是低置信度候选，不是已确认联系人。AX 额外保留 role、subrole 和节点路径，便于按微信版本适配消息气泡层级；这些字段不改变原始文本，也不绕过 review。`captures.capture_frames`/`capture_stability` 记录多帧去抖质量。旧数据库升级时会把已有 `clean_text` 按行回填为 `source=text` 的无坐标 observation；Vision OCR 保存 `source=vision`，AX 文本树保存 `source=accessibility` 且 confidence=1.0。用户 review 不覆盖原始 observation，而是把生效文本物化到 `captures.corrected_text`；分析查询统一使用 `coalesce(corrected_text, clean_text)`。MCP 的 `get_capture_observations` 和 `list_ocr_reviews` 可供通用 Agent 定位并请求人工校正证据。
 
-数据库通过 `schema_migrations(version, applied_at)` 顺序升级。当前版本为 3：v1 引入结构化 OCR，v2 引入校正队列和生效文本，v3 引入 AX 层级元数据和多帧质量字段。连接默认启用 WAL、5 秒 busy timeout 和 `synchronous=normal`；`wsa backup --yes` 使用 SQLite backup API 生成一致快照，而不是直接复制可能尚未合并的 WAL 文件。
+数据库通过 `schema_migrations(version, applied_at)` 顺序升级。当前版本为 4：v1 引入结构化 OCR，v2 引入校正队列和生效文本，v3 引入 AX 层级元数据和多帧质量字段，v4 引入感知运行与证据/派生事实分层。连接默认启用 WAL、5 秒 busy timeout 和 `synchronous=normal`；`wsa backup --yes` 使用 SQLite backup API 生成一致快照，而不是直接复制可能尚未合并的 WAL 文件。
 
 ## 4. 感知层：AX 优先，OCR 兜底
 
-微信桌面端没有面向个人桌面客户端的稳定 CLI/API，因此产品采用“AX 文本树优先 + 用户可见窗口截图 + macOS Vision OCR 兜底”的组合。AX 只读取前台应用公开的 Accessibility 属性；微信版本或控件不暴露文本时，才回退截图 OCR。当前实现的隐私收紧点：
+微信桌面端没有面向个人桌面客户端的稳定 CLI/API，因此产品采用“AX 文本树优先 + ScreenCaptureKit 指定窗口 + 用户可见窗口截图 + macOS Vision OCR 兜底”的组合。AX 只读取前台应用公开的 Accessibility 属性；微信版本或控件不暴露文本时，才回退截图 OCR。当前实现的隐私收紧点：
 
-- `capture`、`quick-capture`、`watch` 默认只抓取当前前台窗口；使用 CoreGraphics helper 找到前台应用的 window id，再调用 `screencapture -l`，不再在后台循环中弹出交互式全屏选择器。
+- `capture`、`quick-capture`、`watch` 默认只抓取当前前台窗口；`--capture-backend auto` 优先使用 ScreenCaptureKit 指定窗口过滤器，失败后使用 CoreGraphics helper 找到前台应用的 window id，再调用 `screencapture -l`，不在后台循环中弹出交互式全屏选择器。
 - `capture --mode accessibility` 读取前台应用的 AX 文本节点并以 `source=accessibility` 入库；权限未授予、读取失败、文本树为空或多帧不稳定时自动走 `window` OCR，标记为 `source=ocr-fallback`。该模式不生成截图，除非实际发生 OCR fallback。
 - AX 节点同时保留 role/subrole、父子路径和深度；`capture`、`quick-capture`、`watch` 在 Accessibility 模式默认采集 2 帧，只保留跨帧稳定的文本/坐标（可用 `--stable-frames 1` 关闭）。
 - 说话人归因只接受显式的 `姓名:`/`Name:` 标签，并要求 AX 父节点或空间邻近证据；候选以低置信度挂到下一条消息 observation，不能代替人工确认。普通相邻短行、头像猜测和模糊 UI 文案不会被自动当作说话人。
 - `--mode screen` 仍保留为显式 opt-in；Skill/插件不得替用户默认启用它。
+- MCP `capture_preview` 只返回计划和权限状态；只有用户确认 `capture_commit` 且带 `confirmation_text="commit local capture"` 才真正读屏并入库。
 - OCR helper 同时保留 Vision observation 的排序逻辑；群聊说话人识别增加非人名词/后缀保护，避免“产品方向”“项目资料”等普通短句被当成联系人。
 - 已安装 wheel 会把 Swift 源码作为 package data 携带，并把编译产物放在用户缓存目录；不会写入只读的 site-packages。
 
 ### 4.1 更好的感知路线（按可靠性排序）
 
 1. **企业微信官方 AI Bot / 长连接**：如果业务允许迁移到企业微信，优先使用官方机器人/长连接事件，获得结构化消息、发送权限和审计边界；这比桌面 OCR 稳定得多。
-2. **macOS ScreenCaptureKit 指定窗口**：把现有 `screencapture -l` helper 演进为 `SCContentFilter(desktopIndependentWindow:)`，只订阅 WeChat 窗口帧，并配合窗口生命周期和权限检测。它适合长期 watch，避免显示器级采集。
+2. **macOS ScreenCaptureKit 指定窗口（v1.4 已实现）**：`tools/macos_screencapturekit.swift` 使用 `SCContentFilter(desktopIndependentWindow:)` 选择前台应用最大可见窗口，只保存首帧 PNG，并在 `Screen Recording` 权限缺失、窗口不可见或 helper 失败时回退到 `screencapture -l`。CLI 的 `--capture-backend auto` 默认走此策略；`--capture-backend legacy` 可用于兼容诊断。
 3. **macOS Accessibility（AXUIElement）**：当前已实现前台应用 AX 文本树读取、来源标记、归一化坐标和空树/权限失败的 OCR fallback。仍需针对不同微信版本补充窗口/消息气泡层级适配，不能假设所有版本微信都暴露完整文本或说话人关系。
 4. **用户主动分享/导入**：用户手动截取、导入图片、或导入脱敏的聊天归档 manifest，适合隐私敏感场景；不需要驻留 watch。
 
@@ -137,7 +169,10 @@ ocr_observations(
 - `wsa/audit.py`：本地表行数、schema 版本、数据路径和删除影响审计。
 - `wsa/reviews.py`：低置信度 OCR review 队列、人工校正、生效文本物化和审计事件。
 - `wsa/security.py`：MCP 可信根路径策略；CLI/Python API 不受该传输层策略限制。
-- `wsa/connectors.py`：`CaptureConnector` seam、窗口/整屏采集 connector、AX 权限探测、层级元数据解析和多帧稳定合并。
+- `wsa/connectors.py`：`CaptureConnector` seam、ScreenCaptureKit 指定窗口/legacy 窗口/整屏 connector、AX 权限探测、层级元数据解析和多帧稳定合并。
+- `wsa/benchmark.py`、`wsa/fixtures/perception/`：不含真实微信内容的可重复感知 fixture、文本/说话人 precision-recall 和多帧稳定度基线（`wsa benchmark perception`）。
+- `wsa/evidence.py`：读取原始证据对应的消息、参与人和关系事件候选；候选默认不能绕过人工确认。
+- `wsa/privacy.py`：导出脱敏、保留期限预览/清理、WSA 管理截图所有权检查和 OpenSSL 加密备份。
 - `wsa/perception.py`：只对显式标签做可审计的低置信度说话人候选归因；不推断头像身份。
 - `wsa/parser.py`：OCR 文本清洗、联系人提示、信号提取。
 - `wsa/profiles.py`：联系人/群聊/群内发言人画像、链接/文件/组织线索；低置信度的普通短句不进入 speaker。
@@ -150,12 +185,19 @@ ocr_observations(
 
 读写操作分为四类：
 
-1. **纯读**：status、connector status、audit、contacts、brief、quality、dashboard、reports、sources、candidates、feedback list、recent captures。
-2. **本地数据库写入**：ingest、feedback、OCR review、candidate confirm、import source/archive、Obsidian import、analyze。
-3. **本地文件/删除**：capture/watch、export、delete、Obsidian export、reset。
+1. **纯读**：status、connector status、perception diagnostics、capture preview、privacy policy、audit、contacts、brief、quality、dashboard、reports、sources、candidates、evidence candidates、feedback list、recent captures。
+2. **本地数据库写入**：ingest、capture commit、feedback、OCR review、candidate confirm、import source/archive、Obsidian import、analyze。
+3. **本地文件/删除**：capture/watch、export、encrypted backup、过期 evidence purge、delete、Obsidian export、reset。
 4. **进程控制**：watch-interval、watch、stop-watch。
 
-Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。`record_ocr_review` 只能带精确的 `confirmation_text="review OCR observation"` 写入 review；原始 OCR 和截图不会被覆盖。
+Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。`record_ocr_review` 只能带精确的 `confirmation_text="review OCR observation"` 写入 review；`capture_commit`、`purge_expired_captures`、`create_encrypted_backup` 分别要求精确确认文本 `commit local capture`、`purge expired captures`、`create encrypted backup`。原始 OCR 和截图不会被覆盖；过期清理只删除 WSA 自己生成且没有外部引用的截图。
+
+### 6.1 隐私策略
+
+- 默认采集证据保留 90 天，可用 `wsa privacy purge --retention-days N --dry-run` 先看影响面，再用 `--yes` 删除；外部导入图片永远不由 WSA 删除。
+- `wsa export-data --yes` 默认对手机号、邮箱、URL 和候选证据文本做确定性脱敏；必须显式 `--raw` 才导出原文。
+- `wsa backup --encrypt --yes` 或 MCP `create_encrypted_backup` 先用 SQLite backup API 生成临时快照，再用 OpenSSL AES-256-CBC + PBKDF2 加密；口令只从 `WSA_BACKUP_PASSPHRASE`（或指定环境变量）读取，不进入命令参数。临时明文在返回前删除。
+- 这些是本地控制，不是法律合规承诺；共享导出文件前仍需用户检查联系人姓名、文件名和宿主日志。
 
 ## 7. 发布与安装布局
 
@@ -182,7 +224,8 @@ node --check agent/openclaw/wechat-social-assistant-plugin/openclaw_compat.js
 ## 8. 后续演进
 
 - 针对不同微信版本建立经过用户样本验证的头像/气泡区域 profile；当前仍只使用显式标签、bbox 和多帧一致性，不把头像相似度当作身份事实。
-- 用 ScreenCaptureKit 指定窗口替换 `screencapture -l`，增加窗口关闭、权限撤销、多显示器和睡眠恢复测试。
-- MCP initialize 返回 `schemaVersion=1.3.0` 和 capability discovery；插件只消费 MCP，不与 Python 内部函数耦合。
+- 为 ScreenCaptureKit 增加窗口关闭、权限撤销、多显示器和睡眠恢复测试；当前实现已保留 legacy fallback。
+- MCP initialize 返回 `schemaVersion=1.4.0` 和 capability discovery；新增感知诊断、采集预览/确认提交、候选读取和隐私策略工具；插件只消费 MCP，不与 Python 内部函数耦合。
+- 继续增加候选确认/关系事件确认 API，保持 raw evidence 永不被模型推导覆盖；在宿主互操作 smoke test 中覆盖确认字段、路径红线和过期清理的 dry-run。
 - 将企业微信官方长连接作为独立 `official_connector`，与 OCR connector 共享 `CaptureEvent`/`InteractionEvent` 事件模型。
 - 增加脱敏日志、密钥/路径红线检查和一套宿主互操作 smoke test（Hermes wrapper、OpenClaw plugin、裸 MCP）。

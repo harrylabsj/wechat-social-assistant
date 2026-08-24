@@ -4,9 +4,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-## Agent 生态（v1.3）
+## Agent 生态（v1.4）
 
-`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.3 在 v1.2 的 macOS Accessibility AX 文本树读取基础上，新增 AX 层级元数据、显式标签说话人候选和多帧稳定合并，并在 AX 不可用或为空时自动回退到窗口截图 + Vision OCR。
+`wsa` CLI 是跨 agent 生态的稳定底座。Hermes、OpenClaw、Codex、Claude Code 等工具都可以通过本地命令使用同一套能力，而不需要复制业务逻辑。v1.4 在 AX 文本树基础上加入 ScreenCaptureKit 指定窗口优先与 legacy fallback、可重复感知基线、原始证据/派生候选分层、MCP 预览/确认采集和隐私保留/脱敏/加密备份。
 
 仓库提供：
 
@@ -17,7 +17,7 @@
 - `agent/openclaw/wechat-social-assistant-plugin/`：OpenClaw 原生插件，默认只注册读工具，内部复用 MCP。
 - `wsa-mcp` / `python3 -m wsa.mcp_server`：本地优先 MCP server。
 - `docs/architecture.md`：分层架构、数据流、权限边界和 OCR/官方连接演进路线。
-- `docs/roadmap.md`：从 v0.2 到 v1.3 的产品路线图。
+- `docs/roadmap.md`：从 v0.2 到 v1.4 的产品路线图。
 
 Hermes 可用 raw URL 安装：
 
@@ -48,9 +48,9 @@ WSA_ALLOWED_ROOT="$PWD" python3 -m wsa.mcp_server
 
 MCP 会在进程启动时启用路径策略；`db_path`、截图目录和日志路径必须位于 `WSA_ALLOWED_ROOT` 下。OpenClaw 原生插件会从 `allowedRoot` 配置自动传递该变量。
 
-v1.3 暴露的 MCP tools 大部分只读：`get_status`、`get_connector_status`、`get_audit_report`、`search_contacts`、`get_contact_brief`、`get_next_followup`、`get_daily_report`、`get_weekly_report`、`get_relationship_quality`、`get_relationship_dashboard`、`list_relationship_sources`、`list_relationship_candidates`、`list_feedback`、`list_recent_captures`、`get_capture_observations`、`list_ocr_reviews`。其中 `get_connector_status` 可让通用 Agent 先判断 AX、窗口和整屏连接器是否可用；`get_capture_observations` 返回每条文本的 confidence、归一化 bbox、来源、AX 层级和 speaker candidate，`list_recent_captures` 返回多帧稳定度；`list_ocr_reviews` 展示待人工校正的低置信度 observation。写入工具还包括 `record_ocr_review`，必须带 `confirmation_text="review OCR observation"`；其它写入工具仍分别要求 `record local feedback` 和 `confirm relationship candidate`。MCP stdio 进程会把 `db_path`、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。Resources 包括 `wsa://status`、`wsa://audit`、`wsa://contacts`、`wsa://daily-report`、`wsa://weekly-report`、`wsa://relationship-quality`、`wsa://relationship-dashboard`、`wsa://relationship-sources`、`wsa://relationship-candidates`。截图、本地来源导入、数据导出/删除、Obsidian 导入/导出和停止进程仍然走 CLI，并要求用户显式确认。
+v1.4 暴露的 MCP tools 包括 `get_perception_diagnostics`、`capture_preview`、`capture_commit`、`list_evidence_candidates`、`get_privacy_policy`、`purge_expired_captures` 和 `create_encrypted_backup`，以及原有关系查询工具。`capture_preview` 不读屏；真正采集必须调用 `capture_commit` 并带 `confirmation_text="commit local capture"`。过期清理和加密备份也分别要求精确确认文本。MCP stdio 进程会把 `db_path`、输出、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。
 
-OCR 数据采用“原始证据 + 可审计校正”两层存储：`captures` 保存一次采集的业务记录、采集帧数和稳定度，`ocr_observations` 保存每条 OCR 观察的文本、置信度、空间坐标、来源、AX 层级和 speaker 候选，`ocr_reviews`/`ocr_review_events` 保存用户对低质量 observation 的接受、排除或修正；原始 OCR 不会被覆盖，分析使用 `captures.corrected_text` 的生效文本。数据库通过 `schema_migrations` 显式升级，`wsa backup --yes` 使用 SQLite backup API 生成一致快照。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
+OCR 数据采用“原始证据 + 可审计校正 + 派生候选”三层存储：`captures`、`ocr_observations` 保存采集证据，`perception_runs` 保存连接器/后端/稳定度，`message_candidates`、`participant_mentions`、`relation_events` 保存可确认的派生候选；原始 OCR 不会被覆盖。数据库 schema 当前为 v4。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 快速开始
 
@@ -215,7 +215,15 @@ python3 -m wsa.cli delete-contact 张三 --dry-run
 python3 -m wsa.cli delete-contact 张三 --yes
 ```
 
-`audit` 只读输出本地表计数和路径；`export-data` 写出本地 JSON 快照，必须带 `--yes`；`delete-contact` 只删除一个联系人相关的本地记录，建议先 `--dry-run` 看影响面，再用 `--yes` 执行。
+`audit` 只读输出本地表计数和路径；`export-data` 默认对手机号、邮箱、URL 和证据文本脱敏，必须带 `--yes`，只有明确需要原文时才追加 `--raw`；`delete-contact` 只删除一个联系人相关的本地记录，建议先 `--dry-run` 看影响面，再用 `--yes` 执行。
+
+隐私保留与清理：
+
+```bash
+python3 -m wsa.cli privacy policy
+python3 -m wsa.cli privacy purge --retention-days 90 --dry-run
+python3 -m wsa.cli privacy purge --retention-days 90 --yes
+```
 
 一键分析并生成报告：
 
@@ -355,6 +363,9 @@ python3 -m wsa.cli weekly-report --out reports/weekly.md
 
 ```bash
 python3 -m wsa.cli backup --out data/backups/social-$(date +%Y%m%d-%H%M%S).db --yes
+
+export WSA_BACKUP_PASSPHRASE='use-a-local-secret-manager'
+python3 -m wsa.cli backup --encrypt --yes
 ```
 
 截图导入后，如果 Vision confidence 较低，先查看校正队列：
@@ -391,7 +402,15 @@ python3 -m wsa.cli capture --contact 张三 --mode accessibility
 
 `accessibility` 默认读取两帧并只保留稳定节点；可用 `--stable-frames 1` 关闭去抖，或提高帧数换取更稳的结果。它不保存截图，直接把 AX 文本作为 `source=accessibility` 的结构化 observation 入库；如果权限未授予、控件不暴露文本、文本树为空或没有稳定节点，会自动使用前台窗口截图 + Vision OCR，并标记为 `source=ocr-fallback`。AX 结果会保留 role、父子路径和深度；只有明确的 `姓名:`/`Name:` 标签才会给下一条消息附加低置信度 speaker candidate。所有 AX 结果仍需经过联系人提示和人工 OCR review，不能把 UI 文本视为可信指令。
 
-`--mode window` 会定位当前前台窗口的 window id，只截取该窗口；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。
+不接触真实微信内容的感知回归基线：
+
+```bash
+python3 -m wsa.cli benchmark perception
+```
+
+入库后，原始 observation 与 `message_candidates`、`participant_mentions`、`relation_events` 分开保存；候选记录默认保持 `candidate`，不会被分析引擎直接当成已确认事实。
+
+`--mode window` 默认使用 `--capture-backend auto`：优先用 ScreenCaptureKit 的指定窗口过滤器，只保存前台应用窗口帧；权限或 helper 不可用时回退到 `screencapture -l`。可用 `--capture-backend legacy` 强制旧路径；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。
 截图采集完成后，命令行也会回显 `contact=... person=... signals=... image=...`，其中 `signals` 使用中文关系信号，没有信号时显示 `signals=无`，方便马上判断 OCR 入库是否有效。
 如果 OCR 文本和已有记录重复，`capture/watch` 会显示 `duplicate`；系统会把这次解析出的关系信号补回既有记录，避免旧库漏掉线索。已有记录缺少截图时会把新图片补挂上去并输出 `image_attached=...`，同时把该记录的证据时间、来源和联系人最近出现时间更新为这次截图；已有记录已经有可用截图时才删除这次刚截的新图片并输出 `duplicate_image_removed=...`，避免截图目录被重复画面撑大。
 

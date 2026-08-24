@@ -2,7 +2,7 @@
   "schema_version": "2026-08-23",
   "id": "wechat-social-assistant",
   "name": "WeChat Social Assistant",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
   "ecosystems": [
     "hermes",
@@ -26,6 +26,13 @@
     "tools": [
       "get_status",
       "get_connector_status",
+      "get_perception_diagnostics",
+      "capture_preview",
+      "capture_commit",
+      "list_evidence_candidates",
+      "get_privacy_policy",
+      "purge_expired_captures",
+      "create_encrypted_backup",
       "get_audit_report",
       "search_contacts",
       "get_contact_brief",
@@ -62,7 +69,7 @@
       "relationship-candidate-review",
       "safe-capture-review"
     ],
-    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'. The MCP launcher restricts db_path, captures_dir, and log_file to WSA_ALLOWED_ROOT."
+    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'; capture_commit needs confirmation_text='commit local capture'; purge_expired_captures needs confirmation_text='purge expired captures' when dry_run=false; create_encrypted_backup needs confirmation_text='create encrypted backup'. The MCP launcher restricts db_path, output_path, captures_dir, and log_file to WSA_ALLOWED_ROOT."
   },
   "openclaw_plugin": {
     "manifest": "agent/openclaw/wechat-social-assistant-plugin/openclaw.plugin.json",
@@ -104,7 +111,13 @@
     "accessibility_text_tree_capture",
     "accessibility_hierarchy_metadata",
     "multi_frame_capture_stability",
-    "conservative_speaker_attribution"
+    "conservative_speaker_attribution",
+    "screencapturekit_window_capture",
+    "perception_benchmark_fixtures",
+    "evidence_candidate_tables",
+    "capture_preview_commit",
+    "privacy_retention_redaction",
+    "encrypted_backup"
   ],
   "commands": [
     {
@@ -118,10 +131,21 @@
       "example": "python3 -m wsa.cli connectors"
     },
     {
+      "name": "benchmark",
+      "mode": "read",
+      "example": "python3 -m wsa.cli benchmark perception"
+    },
+    {
       "name": "backup",
       "mode": "write-files",
       "requires_confirmation": true,
       "example": "python3 -m wsa.cli backup --out ./data/backups/social.db --yes"
+    },
+    {
+      "name": "privacy",
+      "mode": "read-or-delete",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli privacy purge --retention-days 90 --dry-run"
     },
     {
       "name": "ocr-review",
@@ -290,7 +314,8 @@
     "reads_wechat_database": false,
     "sends_messages": false,
     "requires_user_confirmation_for_writes": true,
-    "export_delete": "export-data writes a local JSON export; delete-contact removes one contact after --yes or previews with --dry-run.",
+    "export_delete": "export-data writes a redacted local JSON export by default (use --raw explicitly); delete-contact removes one contact after --yes or previews with --dry-run.",
+    "retention": "privacy purge defaults to a 90-day capture window and only removes WSA-managed unshared screenshots.",
     "auditability": "Commands print affected paths and process state; generated files stay local unless the user publishes them."
   },
   "install": {

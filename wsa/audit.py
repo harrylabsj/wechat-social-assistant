@@ -5,14 +5,19 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .privacy import redact_payload
 from .store import connect, init_db, now_iso
 
 
 AUDIT_TABLES = (
     "people",
     "captures",
+    "perception_runs",
     "capture_signals",
     "ocr_observations",
+    "message_candidates",
+    "participant_mentions",
+    "relation_events",
     "ocr_reviews",
     "ocr_review_events",
     "contact_feedback",
@@ -52,6 +57,10 @@ class DeleteContactResult:
     removed_enrichments: int
     removed_sources: int
     removed_screenshots: int
+    removed_perception_runs: int = 0
+    removed_message_candidates: int = 0
+    removed_participant_mentions: int = 0
+    removed_relation_events: int = 0
     dry_run: bool = False
 
 
@@ -103,17 +112,25 @@ def audit_report_to_dict(report: AuditReport) -> dict[str, Any]:
     }
 
 
-def export_local_data(db_path: Path | str, *, out_path: Path | str) -> ExportDataResult:
+def export_local_data(
+    db_path: Path | str,
+    *,
+    out_path: Path | str,
+    redact: bool = True,
+) -> ExportDataResult:
     init_db(db_path)
     out = Path(out_path)
     generated_at = now_iso()
     with connect(db_path) as conn:
         tables = {table: _table_rows(conn, table) for table in AUDIT_TABLES}
-        counts = {table: len(rows) for table, rows in tables.items()}
+    if redact:
+        tables = redact_payload(tables)
+    counts = {table: len(rows) for table, rows in tables.items()}
     payload = {
-        "schema_version": "1.3.0",
+        "schema_version": "1.4.0",
         "generated_at": generated_at,
         "db_path": str(Path(db_path)),
+        "redacted": bool(redact),
         "tables": tables,
     }
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +169,10 @@ def delete_contact_data(
         removed_enrichments=impact["enrichments"],
         removed_sources=impact["sources"],
         removed_screenshots=len(impact["screenshot_paths"]),
+        removed_perception_runs=impact["perception_runs"],
+        removed_message_candidates=impact["message_candidates"],
+        removed_participant_mentions=impact["participant_mentions"],
+        removed_relation_events=impact["relation_events"],
         dry_run=dry_run,
     )
 
@@ -170,6 +191,10 @@ def delete_result_to_dict(result: DeleteContactResult) -> dict[str, Any]:
         "removed_enrichments": result.removed_enrichments,
         "removed_sources": result.removed_sources,
         "removed_screenshots": result.removed_screenshots,
+        "removed_perception_runs": result.removed_perception_runs,
+        "removed_message_candidates": result.removed_message_candidates,
+        "removed_participant_mentions": result.removed_participant_mentions,
+        "removed_relation_events": result.removed_relation_events,
         "dry_run": result.dry_run,
     }
 
@@ -203,6 +228,10 @@ def _delete_contact_impact(conn, name: str, *, managed_root: Path) -> dict[str, 
         "candidates": _count_where(conn, "relationship_candidates", "name = ? or source_chat = ?", (name, name)),
         "enrichments": _count_where(conn, "contact_enrichments", "person_name = ?", (name,)),
         "sources": _count_where(conn, "relationship_sources", "person_name = ?", (name,)),
+        "perception_runs": _count_by_ids(conn, "perception_runs", "capture_id", capture_ids),
+        "message_candidates": _count_by_ids(conn, "message_candidates", "capture_id", capture_ids),
+        "participant_mentions": _count_by_ids(conn, "participant_mentions", "capture_id", capture_ids),
+        "relation_events": _count_by_ids(conn, "relation_events", "capture_id", capture_ids),
     }
 
 

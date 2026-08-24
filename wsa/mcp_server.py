@@ -4,12 +4,15 @@ import argparse
 from datetime import date
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .audit import audit_report_to_dict, build_audit_report, render_audit_report_markdown
+from .benchmark import benchmark_report_to_dict, run_perception_benchmark
 from .cli import (
+    _capture_once,
     _best_hidden_suggestion,
     _brief_display_evidence,
     _brief_no_suggestion_message,
@@ -35,6 +38,12 @@ from .dashboard import (
     render_relationship_dashboard_markdown,
 )
 from .enrichment import enrichment_by_person, enrichment_to_dict
+from .evidence import (
+    evidence_summary,
+    list_message_candidates,
+    list_participant_mentions,
+    list_relation_events,
+)
 from .feedback import (
     FEEDBACK_ACTIONS,
     feedback_to_dict,
@@ -43,6 +52,13 @@ from .feedback import (
     render_feedback_markdown,
 )
 from .profiles import ContactProfile, build_profiles
+from .privacy import (
+    DEFAULT_PASSPHRASE_ENV,
+    DEFAULT_RETENTION_DAYS,
+    PrivacyPolicy,
+    encrypted_backup_database,
+    purge_expired_captures,
+)
 from .relationship_quality import (
     build_relationship_quality_cards,
     quality_card_to_dict,
@@ -73,8 +89,8 @@ from .suggestions import Suggestion, build_suggestions, followup_strength_label
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
-SERVER_VERSION = "1.3.0"
-SERVER_SCHEMA_VERSION = "1.3.0"
+SERVER_VERSION = "1.4.0"
+SERVER_SCHEMA_VERSION = "1.4.0"
 MCP_CAPABILITIES = (
     "read_relationship_memory",
     "structured_ocr_observations",
@@ -82,6 +98,12 @@ MCP_CAPABILITIES = (
     "accessibility_text_capture",
     "accessibility_hierarchy_metadata",
     "multi_frame_capture_stability",
+    "screencapturekit_window_capture",
+    "evidence_derived_fact_split",
+    "capture_preview_commit",
+    "perception_benchmark_fixtures",
+    "privacy_retention_redaction",
+    "encrypted_backup",
     "confirmed_local_writes",
     "path_policy",
 )
@@ -118,6 +140,111 @@ MCP_TOOLS = [
             "type": "object",
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "get_perception_diagnostics",
+        "description": "Read connector availability, privacy-safe perception benchmark metrics, and evidence-table backlog.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+                "fixtures": {"type": "string", "description": "Optional perception fixture directory."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "capture_preview",
+        "description": "Plan a local WeChat capture without touching the screen or database; returns the connector and confirmation contract.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["window", "screen", "accessibility"], "default": "window"},
+                "capture_backend": {"type": "string", "enum": ["auto", "screencapturekit", "legacy"], "default": "auto"},
+                "stable_frames": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2},
+                "contact_name": {"type": "string"},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+    },
+    {
+        "name": "capture_commit",
+        "description": "Capture and ingest local WeChat evidence only after explicit user confirmation; never sends a message.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["confirmed", "confirmation_text"],
+            "properties": {
+                "mode": {"type": "string", "enum": ["window", "screen", "accessibility"], "default": "window"},
+                "capture_backend": {"type": "string", "enum": ["auto", "screencapturekit", "legacy"], "default": "auto"},
+                "stable_frames": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2},
+                "contact_name": {"type": "string"},
+                "source": {"type": "string", "default": "mcp-capture"},
+                "crop": {"type": "string"},
+                "crop_preset": {"type": "string", "enum": ["none", "wechat-chat"], "default": "none"},
+                "confirmed": {"type": "boolean", "description": "Must be true after the user approves local capture."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": "Must exactly equal: commit local capture",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
+    {
+        "name": "list_evidence_candidates",
+        "description": "Read the separate message, participant, and relation-event candidate tables without changing raw OCR evidence.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["candidate", "confirmed", "rejected"], "default": "candidate"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_privacy_policy",
+        "description": "Read WSA's local retention, redaction, managed-image, and encrypted-backup policy.",
+        "inputSchema": {"type": "object", "additionalProperties": False, "properties": {}},
+    },
+    {
+        "name": "purge_expired_captures",
+        "description": "Preview or delete expired local capture evidence; deletion requires explicit confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "retention_days": {"type": "integer", "minimum": 1, "default": DEFAULT_RETENTION_DAYS},
+                "as_of": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "confirmed": {"type": "boolean"},
+                "confirmation_text": {"type": "string", "description": "Must equal: purge expired captures when dry_run=false."},
+                "db_path": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+    },
+    {
+        "name": "create_encrypted_backup",
+        "description": "Create a local OpenSSL-encrypted SQLite backup using a passphrase environment variable.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["output_path", "confirmed", "confirmation_text"],
+            "properties": {
+                "output_path": {"type": "string", "description": "Encrypted backup path under the MCP trusted root."},
+                "passphrase_env": {"type": "string", "default": DEFAULT_PASSPHRASE_ENV},
+                "confirmed": {"type": "boolean"},
+                "confirmation_text": {"type": "string", "description": "Must exactly equal: create encrypted backup"},
+                "db_path": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
     },
     {
         "name": "search_contacts",
@@ -573,6 +700,13 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_status": _tool_get_status,
         "get_audit_report": _tool_get_audit_report,
         "get_connector_status": _tool_get_connector_status,
+        "get_perception_diagnostics": _tool_get_perception_diagnostics,
+        "capture_preview": _tool_capture_preview,
+        "capture_commit": _tool_capture_commit,
+        "list_evidence_candidates": _tool_list_evidence_candidates,
+        "get_privacy_policy": _tool_get_privacy_policy,
+        "purge_expired_captures": _tool_purge_expired_captures,
+        "create_encrypted_backup": _tool_create_encrypted_backup,
         "search_contacts": _tool_search_contacts,
         "get_contact_brief": _tool_get_contact_brief,
         "get_next_followup": _tool_get_next_followup,
@@ -729,6 +863,247 @@ def _tool_get_connector_status(arguments: dict[str, Any]) -> dict[str, Any]:
             f"detail={status['detail']}"
         )
     return _tool_result("\n".join(lines) + "\n", {"connectors": payload})
+
+
+def _tool_get_perception_diagnostics(arguments: dict[str, Any]) -> dict[str, Any]:
+    statuses = connector_statuses()
+    fixture_value = arguments.get("fixtures")
+    fixture_path = (
+        resolve_mcp_path(
+            Path(str(fixture_value)).expanduser(),
+            default=Path(str(fixture_value)).expanduser(),
+            label="fixtures",
+        )
+        if fixture_value
+        else None
+    )
+    benchmark = run_perception_benchmark(fixture_path) if fixture_path else run_perception_benchmark()
+    summary = evidence_summary(_db_path(arguments))
+    connectors = [
+        {
+            "name": status.name,
+            "available": status.available,
+            "detail": status.detail,
+            "can_capture": status.can_capture,
+            "can_read_text": status.can_read_text,
+        }
+        for status in statuses
+    ]
+    summary_payload = {
+        "perception_runs": summary.perception_runs,
+        "message_candidates": summary.message_candidates,
+        "participant_mentions": summary.participant_mentions,
+        "relation_events": summary.relation_events,
+        "pending_messages": summary.pending_messages,
+        "pending_mentions": summary.pending_mentions,
+        "pending_events": summary.pending_events,
+    }
+    lines = [
+        "# 感知诊断",
+        "",
+        f"- 基线：{'通过' if benchmark.passed else '未通过'}",
+        f"- 文本 precision/recall：{benchmark.text_precision:.3f}/{benchmark.text_recall:.3f}",
+        f"- 说话人 precision/recall：{benchmark.speaker_precision:.3f}/{benchmark.speaker_recall:.3f}",
+        f"- 多帧稳定性：{benchmark.stability:.3f}",
+        f"- 待审消息/参与人/关系事件：{summary.pending_messages}/{summary.pending_mentions}/{summary.pending_events}",
+        "",
+        "连接器：",
+    ]
+    lines.extend(
+        f"- {item['name']}: {'available' if item['available'] else 'unavailable'} — {item['detail']}"
+        for item in connectors
+    )
+    return _tool_result(
+        "\n".join(lines) + "\n",
+        {
+            "connectors": connectors,
+            "benchmark": benchmark_report_to_dict(benchmark),
+            "evidence": summary_payload,
+        },
+    )
+
+
+def _tool_capture_preview(arguments: dict[str, Any]) -> dict[str, Any]:
+    mode = str(arguments.get("mode") or "window")
+    backend = str(arguments.get("capture_backend") or "auto")
+    if mode not in {"window", "screen", "accessibility"}:
+        raise ValueError("capture_preview mode must be window, screen, or accessibility")
+    if backend not in {"auto", "screencapturekit", "legacy"}:
+        raise ValueError("capture_preview capture_backend must be auto, screencapturekit, or legacy")
+    statuses = {status.name: status for status in connector_statuses()}
+    if mode == "accessibility":
+        selected = statuses.get("macos-accessibility")
+        fallback = "macos-screencapturekit" if backend != "legacy" else "macos-window-capture"
+    elif mode == "screen":
+        selected = statuses.get("macos-screen-capture")
+        fallback = None
+    else:
+        selected = statuses.get("macos-screencapturekit") if backend != "legacy" else statuses.get("macos-window-capture")
+        fallback = "macos-window-capture" if backend in {"auto", "screencapturekit"} else None
+    selected_name = selected.name if selected else None
+    plan = {
+        "mode": mode,
+        "requested_backend": backend,
+        "selected_connector": selected_name,
+        "selected_available": bool(selected and selected.available),
+        "fallback_connector": fallback,
+        "stable_frames": max(1, min(5, int(arguments.get("stable_frames") or 2))),
+        "contact_name": _optional_str(arguments.get("contact_name")),
+        "requires_confirmation": True,
+        "confirmation_text": "commit local capture",
+        "side_effects": ["read frontmost visible WeChat window", "write one local capture and derived candidates"],
+    }
+    text = (
+        "# 采集预览\n\n"
+        f"- 模式：{mode}\n"
+        f"- 请求后端：{backend}\n"
+        f"- 首选连接器：{selected_name or 'unavailable'}\n"
+        f"- 可用：{'是' if plan['selected_available'] else '否'}\n"
+        f"- 回退：{fallback or '无'}\n"
+        f"- 稳定帧数：{plan['stable_frames']}\n\n"
+        "预览不会截图、不会读取数据库、不会写入文件。确认后请调用 `capture_commit`，并传入 "
+        "confirmed=true、confirmation_text='commit local capture'。\n"
+    )
+    return _tool_result(text, plan)
+
+
+def _tool_capture_commit(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("confirmed") is not True or arguments.get("confirmation_text") != "commit local capture":
+        raise ValueError("capture_commit requires confirmed=true and confirmation_text='commit local capture'")
+    mode = str(arguments.get("mode") or "window")
+    if mode not in {"window", "screen", "accessibility"}:
+        raise ValueError("capture_commit mode must be window, screen, or accessibility")
+    backend = str(arguments.get("capture_backend") or "auto")
+    if backend not in {"auto", "screencapturekit", "legacy"}:
+        raise ValueError("capture_commit capture_backend must be auto, screencapturekit, or legacy")
+    stable_frames = max(1, min(5, int(arguments.get("stable_frames") or 2)))
+    db_path = _db_path(arguments)
+    args = argparse.Namespace(
+        command="capture",
+        db=db_path,
+        mode=mode,
+        contact=_optional_str(arguments.get("contact_name") or arguments.get("contact")),
+        source=str(arguments.get("source") or "mcp-capture"),
+        crop=_optional_str(arguments.get("crop")),
+        crop_preset=str(arguments.get("crop_preset") or "none"),
+        stable_frames=stable_frames,
+        capture_backend=backend,
+    )
+    outcome = _capture_once(args)
+    match = re.search(r"capture=(\d+)", outcome.output_line)
+    capture_id = int(match.group(1)) if match else None
+    return _tool_result(
+        "# 采集已提交\n\n" + outcome.output_line + "\n",
+        {
+            "capture_id": capture_id,
+            "output": outcome.output_line,
+            "confirmation": "commit local capture",
+            "db_path": str(db_path),
+        },
+    )
+
+
+def _tool_list_evidence_candidates(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    status = str(arguments.get("status") or "candidate")
+    if status not in {"candidate", "confirmed", "rejected"}:
+        raise ValueError("status must be candidate, confirmed, or rejected")
+    limit = _limit(arguments.get("limit"), default=50)
+    messages = list_message_candidates(db_path, status=status, limit=limit)
+    mentions = list_participant_mentions(db_path, status=status, limit=limit)
+    events = list_relation_events(db_path, status=status, limit=limit)
+    text = (
+        "# 证据候选\n\n"
+        f"- 消息：{len(messages)}\n"
+        f"- 参与人提及：{len(mentions)}\n"
+        f"- 关系事件：{len(events)}\n"
+        "\n所有记录仍是候选状态，确认前不会被视为事实。\n"
+    )
+    return _tool_result(
+        text,
+        {"status": status, "messages": messages, "mentions": mentions, "events": events},
+    )
+
+
+def _tool_get_privacy_policy(arguments: dict[str, Any]) -> dict[str, Any]:
+    policy = PrivacyPolicy()
+    payload = {
+        "retention_days": policy.retention_days,
+        "redact_exports": policy.redact_exports,
+        "managed_images": policy.managed_images,
+        "encrypted_backups": policy.encrypted_backups,
+    }
+    text = (
+        "# 隐私策略\n\n"
+        f"- 采集证据保留：{policy.retention_days} 天\n"
+        f"- JSON 导出默认脱敏：{'是' if policy.redact_exports else '否'}\n"
+        f"- 仅删除 WSA 管理的截图：{'是' if policy.managed_images else '否'}\n"
+        f"- 支持加密备份：{'是' if policy.encrypted_backups else '否'}\n"
+    )
+    return _tool_result(text, {"policy": payload})
+
+
+def _tool_purge_expired_captures(arguments: dict[str, Any]) -> dict[str, Any]:
+    dry_run = bool(arguments.get("dry_run", True))
+    if not dry_run and (
+        arguments.get("confirmed") is not True
+        or arguments.get("confirmation_text") != "purge expired captures"
+    ):
+        raise ValueError(
+            "purge_expired_captures requires confirmed=true and confirmation_text='purge expired captures'"
+        )
+    result = purge_expired_captures(
+        _db_path(arguments),
+        retention_days=int(arguments.get("retention_days") or DEFAULT_RETENTION_DAYS),
+        as_of=_optional_str(arguments.get("as_of")),
+        dry_run=dry_run,
+    )
+    text = (
+        f"# {'过期采集预览' if dry_run else '过期采集已清理'}\n\n"
+        f"- 截止时间：{result.cutoff}\n"
+        f"- 命中采集：{result.matched_captures}\n"
+        f"- 删除采集：{result.removed_captures}\n"
+        f"- 删除截图：{result.removed_screenshots}\n"
+    )
+    return _tool_result(
+        text,
+        {
+            "cutoff": result.cutoff,
+            "matched_captures": result.matched_captures,
+            "removed_captures": result.removed_captures,
+            "removed_screenshots": result.removed_screenshots,
+            "dry_run": result.dry_run,
+        },
+    )
+
+
+def _tool_create_encrypted_backup(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("confirmed") is not True or arguments.get("confirmation_text") != "create encrypted backup":
+        raise ValueError(
+            "create_encrypted_backup requires confirmed=true and confirmation_text='create encrypted backup'"
+        )
+    output_value = _optional_str(arguments.get("output_path"))
+    if not output_value:
+        raise ValueError("create_encrypted_backup requires output_path")
+    default_root = _db_path(arguments).parent
+    candidate = Path(output_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = default_root / candidate
+    output = resolve_mcp_path(
+        candidate,
+        default=default_root / "backups" / "social.db.enc",
+        label="output_path",
+        base=default_root,
+    )
+    target = encrypted_backup_database(
+        _db_path(arguments),
+        output,
+        passphrase_env=str(arguments.get("passphrase_env") or DEFAULT_PASSPHRASE_ENV),
+    )
+    return _tool_result(
+        f"# 加密备份已创建\n\n- 路径：{target}\n- 口令来源：环境变量\n",
+        {"output_path": str(target), "passphrase_env": str(arguments.get("passphrase_env") or DEFAULT_PASSPHRASE_ENV)},
+    )
 
 
 def _tool_get_audit_report(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1148,9 +1523,14 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
             select c.id, p.name as contact_name, c.captured_at, c.source, c.image_path,
                    c.capture_frames, c.capture_stability,
                    coalesce(c.corrected_text, c.clean_text) as clean_text,
-                   (select count(*) from ocr_observations o where o.capture_id = c.id) as observation_count
+                   (select count(*) from ocr_observations o where o.capture_id = c.id) as observation_count,
+                   r.connector as perception_connector,
+                   r.backend as perception_backend,
+                   r.status as perception_status,
+                   (select count(*) from message_candidates m where m.capture_id = c.id and m.status = 'candidate') as pending_message_candidates
             from captures c
             join people p on p.id = c.person_id
+            left join perception_runs r on r.capture_id = c.id
             order by c.captured_at desc, c.id desc
             limit ?
             """,
@@ -1167,6 +1547,10 @@ def _recent_captures(db_path: Path, *, limit: int) -> list[dict[str, Any]]:
             "capture_stability": float(row["capture_stability"] if row["capture_stability"] is not None else 1.0),
             "preview": _preview(row["clean_text"]),
             "observation_count": int(row["observation_count"]),
+            "perception_connector": row["perception_connector"],
+            "perception_backend": row["perception_backend"],
+            "perception_status": row["perception_status"],
+            "pending_message_candidates": int(row["pending_message_candidates"] or 0),
         }
         for row in rows
     ]

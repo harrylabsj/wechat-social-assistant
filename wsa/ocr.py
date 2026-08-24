@@ -74,6 +74,7 @@ def capture_screenshot(
     mode: str = "screen",
     crop: str | None = None,
     crop_preset: str = "none",
+    backend: str = "legacy",
 ) -> Path:
     """Capture through the selected perception connector."""
 
@@ -85,6 +86,7 @@ def capture_screenshot(
             mode=mode,
             crop=crop,
             crop_preset=crop_preset,
+            backend=backend,
         )
     )
 

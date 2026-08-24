@@ -6,8 +6,10 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 
 - `wsa status` - inspect database, screenshots, logs, and watch state.
 - `wsa audit` - inspect local table counts and storage paths.
-- `wsa connectors` - inspect window/screen capture availability and macOS Accessibility AX reader readiness.
+- `wsa connectors` - inspect AX, ScreenCaptureKit, window, and screen capture availability.
+- `wsa benchmark perception` - run privacy-safe AX/speaker/stability regression fixtures.
 - `wsa backup --out PATH --yes` - create a consistent SQLite backup after confirmation.
+- `wsa backup --encrypt --yes` - create an OpenSSL-encrypted backup using `WSA_BACKUP_PASSPHRASE`.
 - `wsa ocr-review --max-confidence 0.75` - list low-confidence OCR observations for human review.
 - `wsa contacts --query NAME` - find known contacts, groups, speakers, organizations, and identity hints.
 - `wsa brief NAME` - summarize one contact or matching set of contacts.
@@ -27,7 +29,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v1.3 MCP server exposes read tools: `get_status`, `get_connector_status`, `get_audit_report`, `search_contacts`, `get_contact_brief`, `get_next_followup`, `get_daily_report`, `get_weekly_report`, `get_relationship_quality`, `get_relationship_dashboard`, `list_relationship_sources`, `list_relationship_candidates`, `list_feedback`, `list_recent_captures`, `get_capture_observations`, and `list_ocr_reviews`. Capture payloads include AX hierarchy and multi-frame stability metadata when available. Write tools are `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`; all require explicit confirmation arguments. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
+The v1.4 MCP server adds read-only `get_perception_diagnostics`, `capture_preview`, `list_evidence_candidates`, and `get_privacy_policy`; `capture_commit`, `purge_expired_captures`, and `create_encrypted_backup` are confirmation-gated writes alongside `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`. Exact confirmation text is documented in the tool schema. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
 
 ## Confirm Before Running
 
@@ -41,7 +43,9 @@ The v1.3 MCP server exposes read tools: `get_status`, `get_connector_status`, `g
 - `wsa import-source PATH --yes` - imports user-provided local contacts, calendar files, meeting notes, Obsidian notes, or email files.
 - `wsa import-wechat-archive --yes` - imports selected WeChat archive manifest metadata as local relationship sources.
 - `wsa cockpit --yes` - imports contact notes and WeChat archive metadata, refreshes derived data, and writes the cockpit report.
-- `wsa export-data --out PATH --yes` - writes a local JSON data export.
+- `wsa export-data --out PATH --yes` - writes a redacted local JSON data export; add `--raw` only when explicitly required.
+- `wsa privacy policy` - show local retention/redaction policy.
+- `wsa privacy purge --retention-days N --dry-run` - preview capture retention cleanup.
 - `wsa delete-contact NAME --dry-run` then `--yes` - previews or deletes one contact's local records.
 - `wsa capture --contact NAME --mode window` - captures the frontmost window and runs Vision OCR.
 - `wsa capture --contact NAME --mode accessibility` - reads two stable AX frames first and automatically falls back to window OCR when AX is unavailable, empty, or unstable. Use `--stable-frames 1` for a single frame.

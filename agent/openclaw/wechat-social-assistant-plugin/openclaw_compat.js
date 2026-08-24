@@ -150,6 +150,30 @@ function toolSpec(api, spec, mcpName) {
 
 const READ_TOOLS = [
   {
+    name: 'wsa_privacy_policy', mcpName: 'get_privacy_policy', description: 'Read local retention, redaction, and backup policy.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'wsa_perception_diagnostics', mcpName: 'get_perception_diagnostics', description: 'Read connector, benchmark, and evidence-candidate diagnostics without capturing data.',
+    parameters: { type: 'object', additionalProperties: false, properties: { fixtures: { type: 'string' } } },
+  },
+  {
+    name: 'wsa_capture_preview', mcpName: 'capture_preview', description: 'Plan a local capture and return the confirmation contract without reading the screen.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        mode: { type: 'string', enum: ['window', 'screen', 'accessibility'] },
+        capture_backend: { type: 'string', enum: ['auto', 'screencapturekit', 'legacy'] },
+        stable_frames: { type: 'integer', minimum: 1, maximum: 5 },
+        contact_name: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'wsa_evidence_candidates', mcpName: 'list_evidence_candidates', description: 'Read message, participant, and relation-event candidate records.',
+    parameters: { type: 'object', additionalProperties: false, properties: { status: { type: 'string' }, limit: { type: 'integer' } } },
+  },
+  {
     name: 'wsa_connector_status', mcpName: 'get_connector_status', description: 'Read screen/window/Accessibility connector availability without capturing data.',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
@@ -233,6 +257,38 @@ const READ_TOOLS = [
 ];
 
 const WRITE_TOOLS = [
+  {
+    name: 'wsa_purge_expired_captures', mcpName: 'purge_expired_captures', description: 'Preview or purge expired local captures after confirmation.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        retention_days: { type: 'integer', minimum: 1 }, as_of: { type: 'string' }, dry_run: { type: 'boolean' },
+        confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'wsa_create_encrypted_backup', mcpName: 'create_encrypted_backup', description: 'Create an encrypted local SQLite backup after confirmation.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { output_path: { type: 'string' }, passphrase_env: { type: 'string' }, confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' } },
+      required: ['output_path', 'confirmed', 'confirmation_text'],
+    },
+  },
+  {
+    name: 'wsa_capture_commit', mcpName: 'capture_commit', description: 'Capture and ingest local evidence after explicit user confirmation.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        mode: { type: 'string', enum: ['window', 'screen', 'accessibility'] },
+        capture_backend: { type: 'string', enum: ['auto', 'screencapturekit', 'legacy'] },
+        stable_frames: { type: 'integer', minimum: 1, maximum: 5 },
+        contact_name: { type: 'string' }, source: { type: 'string' }, crop: { type: 'string' }, crop_preset: { type: 'string' },
+        confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' },
+      },
+      required: ['confirmed', 'confirmation_text'],
+    },
+  },
   {
     name: 'wsa_record_feedback', mcpName: 'record_feedback', description: 'Record local feedback after explicit user confirmation.',
     parameters: {

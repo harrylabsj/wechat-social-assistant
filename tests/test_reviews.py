@@ -118,12 +118,12 @@ class OCRReviewTests(unittest.TestCase):
             db_path = root / "social.db"
             backup = root / "backups" / "social.db"
             init_db(db_path)
-            self.assertEqual(3, schema_version(db_path))
+            self.assertEqual(4, schema_version(db_path))
             ingest_capture(db_path, raw_text="张三\n你好", contact_hint="张三", interaction_at=None)
             backup_database(db_path, backup)
             with sqlite3.connect(backup) as conn:
                 self.assertEqual(1, conn.execute("select count(*) from captures").fetchone()[0])
-                self.assertEqual(3, conn.execute("select max(version) from schema_migrations").fetchone()[0])
+                self.assertEqual(4, conn.execute("select max(version) from schema_migrations").fetchone()[0])
 
     def test_newer_database_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:

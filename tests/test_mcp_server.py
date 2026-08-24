@@ -3,6 +3,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from wsa import mcp_server
 from wsa.store import ingest_capture, init_db
@@ -20,6 +22,13 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_status",
                 "get_audit_report",
                 "get_connector_status",
+                "get_perception_diagnostics",
+                "capture_preview",
+                "capture_commit",
+                "list_evidence_candidates",
+                "get_privacy_policy",
+                "purge_expired_captures",
+                "create_encrypted_backup",
                 "search_contacts",
                 "get_contact_brief",
                 "get_next_followup",
@@ -87,7 +96,7 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("tools", result["capabilities"])
         self.assertIn("resources", result["capabilities"])
         self.assertIn("prompts", result["capabilities"])
-        self.assertEqual("1.3.0", result["serverInfo"]["schemaVersion"])
+        self.assertEqual("1.4.0", result["serverInfo"]["schemaVersion"])
         self.assertIn("ocr_review_queue", result["serverInfo"]["capabilities"])
         self.assertIn("accessibility_text_capture", result["serverInfo"]["capabilities"])
         self.assertEqual(mcp_server.MCP_TOOLS, tools["result"]["tools"])
@@ -119,6 +128,11 @@ class MCPServerContractTests(unittest.TestCase):
             recent = _call_tool("list_recent_captures", db_path=db_path, limit=2)
             observations = _call_tool("get_capture_observations", db_path=db_path, capture_id=1)
             reviews = _call_tool("list_ocr_reviews", db_path=db_path, max_confidence=None)
+            diagnostics = _call_tool("get_perception_diagnostics", db_path=db_path)
+            evidence = _call_tool("list_evidence_candidates", db_path=db_path, limit=10)
+            preview = _call_tool("capture_preview", db_path=db_path, mode="window")
+            policy = _call_tool("get_privacy_policy", db_path=db_path)
+            purge = _call_tool("purge_expired_captures", db_path=db_path, dry_run=True, retention_days=90)
 
         self.assertGreaterEqual(status["structuredContent"]["contact_count"], 3)
         self.assertIn("audit", audit["structuredContent"])
@@ -151,6 +165,11 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertIn("bbox", observations["structuredContent"]["observations"][0])
         self.assertTrue(reviews["structuredContent"]["reviews"])
         self.assertEqual("pending", reviews["structuredContent"]["reviews"][0]["status"])
+        self.assertIn("benchmark", diagnostics["structuredContent"])
+        self.assertIn("messages", evidence["structuredContent"])
+        self.assertTrue(preview["structuredContent"]["requires_confirmation"])
+        self.assertEqual(90, policy["structuredContent"]["policy"]["retention_days"])
+        self.assertTrue(purge["structuredContent"]["dry_run"])
 
     def test_connector_status_is_read_only_and_structured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -162,6 +181,31 @@ class MCPServerContractTests(unittest.TestCase):
             {"macos-window-capture", "macos-screen-capture", "macos-accessibility"},
         )
         self.assertIn("# 采集连接器状态", result["content"][0]["text"])
+
+    def test_capture_commit_requires_confirmation_and_returns_capture_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            with patch(
+                "wsa.mcp_server._capture_once",
+                return_value=SimpleNamespace(
+                    output_line="inserted capture=7 contact=张三 person=1 signals=无 image=/tmp/7.png",
+                ),
+            ) as capture:
+                with self.assertRaises(AssertionError):
+                    _call_tool("capture_commit", db_path=db_path, confirmed=False, confirmation_text="")
+                result = _call_tool(
+                    "capture_commit",
+                    db_path=db_path,
+                    mode="window",
+                    capture_backend="auto",
+                    contact_name="张三",
+                    confirmed=True,
+                    confirmation_text="commit local capture",
+                )
+
+        self.assertEqual(7, result["structuredContent"]["capture_id"])
+        self.assertEqual("commit local capture", result["structuredContent"]["confirmation"])
+        self.assertEqual("张三", capture.call_args.args[0].contact)
 
     def test_ocr_review_mcp_tool_requires_confirmation_and_updates_capture(self):
         with tempfile.TemporaryDirectory() as tmpdir:

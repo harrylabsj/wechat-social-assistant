@@ -148,6 +148,43 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("AXStaticText", observations[1].role)
         self.assertEqual("0.1.0", observations[1].node_path)
 
+    def test_ingest_capture_separates_evidence_from_derived_candidates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            result = ingest_capture(
+                db_path,
+                raw_text="张三\n明天一起吃饭吗？\n项目合作下周推进",
+                contact_hint="张三",
+                source="accessibility",
+                perception_connector="macos-accessibility",
+                capture_backend="accessibility",
+                observations=(
+                    OCRObservation(text="张三", source="accessibility", sequence=0),
+                    OCRObservation(text="明天一起吃饭吗？", source="accessibility", sequence=1),
+                ),
+            )
+
+            with connect(db_path) as conn:
+                run = conn.execute(
+                    "select connector, backend, status from perception_runs where capture_id = ?",
+                    (result.capture_id,),
+                ).fetchone()
+                messages = conn.execute(
+                    "select count(*) from message_candidates where capture_id = ?",
+                    (result.capture_id,),
+                ).fetchone()[0]
+                events = conn.execute(
+                    "select event_type, status from relation_events where capture_id = ?",
+                    (result.capture_id,),
+                ).fetchall()
+
+        self.assertEqual(("macos-accessibility", "accessibility", "completed"), tuple(run))
+        self.assertEqual(2, messages)
+        self.assertEqual(
+            [("project", "candidate"), ("schedule", "candidate")],
+            [tuple(row) for row in events],
+        )
+
     def test_ingest_capture_persists_multi_frame_quality_and_ax_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "social.db"

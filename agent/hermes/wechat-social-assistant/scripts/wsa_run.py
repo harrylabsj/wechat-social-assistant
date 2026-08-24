@@ -24,6 +24,8 @@ READ_COMMANDS = {
     "profiles",
     "ocr-image",
     "connectors",
+    "benchmark",
+    "privacy",
 }
 WRITE_COMMANDS = {
     "init",
@@ -81,7 +83,9 @@ def _requires_confirmation(command: str, args: list[str]) -> bool:
         return True
     if command == "cockpit" and ("--dry-run" not in args[1:] or "--out" in args[1:]):
         return True
-    return command == "candidates" and "--sync" in args[1:]
+    if command == "candidates" and "--sync" in args[1:]:
+        return True
+    return command == "privacy" and args[1:2] == ["purge"] and "--yes" in args[1:]
 
 
 if __name__ == "__main__":

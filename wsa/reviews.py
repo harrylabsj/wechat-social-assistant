@@ -360,6 +360,26 @@ def _rebuild_capture_text(conn: sqlite3.Connection, capture_id: int) -> bool:
     conn.execute("update captures set corrected_text = ? where id = ?", (corrected_text, capture_id))
     conn.execute("delete from capture_signals where capture_id = ?", (capture_id,))
     _insert_review_signals(conn, capture_id, effective)
+    # Relation events are derived from signals, not raw observations. Refresh
+    # only still-pending candidates after a review; a user-confirmed event is
+    # preserved as an explicit fact and is never silently rewritten.
+    conn.execute(
+        "delete from relation_events where capture_id = ? and status = 'candidate'",
+        (capture_id,),
+    )
+    conn.execute(
+        """
+        insert or ignore into relation_events
+        (capture_id, person_id, event_type, confidence, status,
+         evidence_excerpt, occurred_at, created_at, updated_at)
+        select s.capture_id, c.person_id, s.kind, 0.5, 'candidate',
+               s.phrase, c.captured_at, ?, ?
+        from capture_signals s
+        join captures c on c.id = s.capture_id
+        where s.capture_id = ?
+        """,
+        (now_iso(), now_iso(), capture_id),
+    )
     return previous != corrected_text
 
 
