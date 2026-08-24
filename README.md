@@ -19,6 +19,27 @@
 - `docs/architecture.md`：分层架构、数据流、权限边界和 OCR/官方连接演进路线。
 - `docs/roadmap.md`：从 v0.2 到 v1.4 的产品路线图。
 
+## 一键安装与启动
+
+WSA 使用仓库内虚拟环境安装，不会修改 Homebrew 或系统 Python，因此不会触发 PEP 668 的 `externally-managed-environment` 错误：
+
+```bash
+cd wechat-social-assistant
+./install.sh
+./start.sh
+```
+
+`install.sh` 会创建 `.venv`、安装 CLI/MCP、初始化 `data/social.db` 并运行环境自检。`start.sh` 不带参数时启动显式的前台 `watch` 采集；按 `Ctrl-C` 停止。常用入口：
+
+```bash
+./start.sh status
+./start.sh dashboard
+./start.sh watch --interval 60
+WSA_ALLOWED_ROOT="$PWD" ./start.sh mcp
+```
+
+如果只想调用一次命令而不启动采集，也可以使用 `.venv/bin/wsa`，或继续使用 `python3 -m wsa.cli`。
+
 Hermes 可用 raw URL 安装：
 
 ```bash

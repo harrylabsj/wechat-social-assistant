@@ -319,8 +319,10 @@
     "auditability": "Commands print affected paths and process state; generated files stay local unless the user publishes them."
   },
   "install": {
-    "from_repo": "python3 -m pip install git+https://github.com/harrylabsj/wechat-social-assistant.git",
-    "from_checkout": "python3 -m pip install -e .",
+    "from_repo": "git clone https://github.com/harrylabsj/wechat-social-assistant.git && cd wechat-social-assistant && ./install.sh",
+    "from_checkout": "./install.sh",
+    "start": "./start.sh",
+    "mcp_start": "WSA_ALLOWED_ROOT=\"$PWD\" ./start.sh mcp",
     "hermes_skill": "hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes",
     "openclaw_plugin": "openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin",
     "openclaw_skill_fallback": "Copy agent/openclaw/wechat-social-assistant.md into the host skill directory when native plugins are unavailable."

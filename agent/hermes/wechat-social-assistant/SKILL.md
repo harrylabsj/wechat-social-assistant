@@ -25,7 +25,7 @@ Use this skill when the user asks to work with `wechat-social-assistant`, `wsa`,
 ## Quick Start
 
 1. Run `scripts/doctor.py --json` to inspect whether the local CLI, database, OCR helpers, and optional Obsidian paths are available.
-2. If the CLI is missing, run `scripts/install_cli.sh` from a trusted checkout or ask the user before installing from GitHub.
+2. If the CLI is missing, run `./install.sh` from a trusted checkout. This creates the local `.venv`, initializes the database, and avoids installing into an externally managed system Python. `scripts/install_cli.sh` delegates to the same installer when invoked from the checkout.
 3. Use `wsa status` to understand the current local memory before recommending actions.
 4. In MCP-native environments, configure the stdio server command `wsa-mcp` or `python3 -m wsa.mcp_server`.
 5. In OpenClaw, prefer the native plugin at `agent/openclaw/wechat-social-assistant-plugin/`; use this Skill as the fallback workflow when native plugins are unavailable.

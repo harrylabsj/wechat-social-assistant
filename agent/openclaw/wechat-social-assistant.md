@@ -8,12 +8,17 @@ This package has three host surfaces:
 
 ## Install
 
-Install the Python package from a trusted checkout or release first:
+Install the Python package from a trusted checkout first. The repository
+installer creates a local virtual environment and initializes the database,
+which avoids PEP 668 errors from Homebrew/system Python:
 
 ```bash
-python3 -m pip install -e .
-# or: python3 -m pip install "git+https://github.com/harrylabsj/wechat-social-assistant.git"
+./install.sh
+./start.sh status
 ```
+
+The installed interpreter is `./.venv/bin/python`; configure the plugin's
+`pythonPath` to that path when OpenClaw is not using the same environment.
 
 For OpenClaw versions with native plugin support, install the plugin directory using the host's plugin installer (the current CLI is):
 
