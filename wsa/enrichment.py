@@ -9,6 +9,7 @@ from .store import connect, init_db, now_iso
 
 
 ENRICHMENT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("category", "分类"),
     ("company", "公司"),
     ("role", "职位/角色"),
     ("context", "认识场景"),

@@ -6,10 +6,24 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from wsa.cli import CaptureOutcome, main
+from wsa.cli import CaptureOutcome, build_parser, main
 
 
 class ShortcutCommandTests(unittest.TestCase):
+    def test_dashboard_storage_and_watch_shortcuts_build_with_callbacks(self):
+        parser = build_parser()
+
+        for argv, command, callback in (
+            (["ui", "--no-browser"], "ui", "cmd_ui"),
+            (["web", "--no-browser"], "web", "cmd_ui"),
+            (["captures-dir"], "captures-dir", "cmd_captures_dir"),
+            (["capture-dir"], "capture-dir", "cmd_captures_dir"),
+            (["stop-watch"], "stop-watch", "cmd_stop_watch"),
+        ):
+            args = parser.parse_args(argv)
+            self.assertEqual(command, args.command)
+            self.assertEqual(callback, args.func.__name__)
+
     def test_quick_capture_uses_hotkey_friendly_defaults(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "data" / "social.db"

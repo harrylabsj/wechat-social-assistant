@@ -34,9 +34,30 @@ cd wechat-social-assistant
 ```bash
 ./start.sh status
 ./start.sh dashboard
+./start.sh ui
 ./start.sh watch --interval 60
+./start.sh captures-dir
 WSA_ALLOWED_ROOT="$PWD" ./start.sh mcp
 ```
+
+截图存储已经从数据库路径中解耦：在 macOS 的真实 checkout 中，安装器会优先创建并使用
+`~/Library/Mobile Documents/com~apple~CloudDocs/codex/wechat-social-assistant/data/captures/`；
+iCloud Drive 未挂载时自动回退到 `data/captures/`。SQLite 数据库、WAL 和日志仍保留在本地，避免
+iCloud 同步数据库造成并发或损坏。可用下面的命令查看或调整截图目录：
+
+```bash
+./start.sh captures-dir                 # 查看当前生效路径和来源
+./start.sh captures-dir --create        # 创建当前生效路径
+./start.sh captures-dir /Volumes/SSD/wsa-captures --create
+./start.sh captures-dir --clear         # 清除显式覆盖，恢复自动 iCloud/本地模式
+WSA_CAPTURES_DIR=/path/to/captures ./start.sh watch
+```
+
+路径优先级为：单次命令的 `--captures-dir` > `WSA_CAPTURES_DIR` 环境变量 >
+`data/settings.json` 的 `captures_dir` > macOS iCloud 自动路径 > 本地 `data/captures`。
+切换后新截图写入新目录；旧目录中的 WSA 管理截图仍会在状态、面板和保留清理中兼容识别。
+
+`./start.sh ui` 会启动一个绑定在 `127.0.0.1:8788` 的本地关系面板，并尝试自动打开浏览器。面板以联系人为中心：左侧是已提取的联系人列表（可搜索），右侧是该联系人的谈话时间线（什么时间、在哪个会话、提炼后的交谈内容）、关系信号和建议跟进动作，有截图的记录可点击查看；还可以在「联系人档案」里直接维护分类、标签、备注（写入本地 `contact_enrichments` 表，与 Obsidian 手工补充合并）。每 10 秒自动刷新；除此之外不提供采集、校正、删除或发送消息的接口，按 `Ctrl-C` 停止。无图形界面时可使用 `./start.sh ui --no-browser`，或改端口 `./start.sh ui --port 8789`。
 
 如果只想调用一次命令而不启动采集，也可以使用 `.venv/bin/wsa`，或继续使用 `python3 -m wsa.cli`。
 
@@ -67,9 +88,20 @@ WSA_ALLOWED_ROOT="$PWD" wsa-mcp
 WSA_ALLOWED_ROOT="$PWD" python3 -m wsa.mcp_server
 ```
 
-MCP 会在进程启动时启用路径策略；`db_path`、截图目录和日志路径必须位于 `WSA_ALLOWED_ROOT` 下。OpenClaw 原生插件会从 `allowedRoot` 配置自动传递该变量。
+MCP 会在进程启动时启用路径策略；`db_path`、输出和日志路径必须位于 `WSA_ALLOWED_ROOT` 下，截图目录还可以是 WSA 当前配置解析出的 iCloud capture root。OpenClaw 原生插件会从 `allowedRoot` 配置自动传递该变量。
 
-v1.4 暴露的 MCP tools 包括 `get_perception_diagnostics`、`capture_preview`、`capture_commit`、`list_evidence_candidates`、`get_privacy_policy`、`purge_expired_captures` 和 `create_encrypted_backup`，以及原有关系查询工具。`capture_preview` 不读屏；真正采集必须调用 `capture_commit` 并带 `confirmation_text="commit local capture"`。过期清理和加密备份也分别要求精确确认文本。MCP stdio 进程会把 `db_path`、输出、截图目录和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下。
+v1.4 暴露的 MCP tools 包括 `get_perception_diagnostics`、`capture_preview`、`capture_commit`、`list_evidence_candidates`、`get_privacy_policy`、`purge_expired_captures` 和 `create_encrypted_backup`，以及原有关系查询工具。`capture_preview` 不读屏；真正采集必须调用 `capture_commit` 并带 `confirmation_text="commit local capture"`。过期清理和加密备份也分别要求精确确认文本。MCP stdio 进程会把 `db_path`、输出和日志路径限制在可信的 `WSA_ALLOWED_ROOT` 下，并只额外信任配置解析出的截图目录。
+
+## 宿主智能与外联草稿
+
+WSA 本身不连 LLM；语义提炼和文案生成由安装了 WSA 的宿主 Agent（Hermes / OpenClaw / Codex / Kimi 等）完成。宿主通过 MCP 读取上下文、写回结果：
+
+- `list_contacts`（按标签/分类/类型过滤）和 `get_contact_context`（单个联系人的完整上下文包：档案、来源群、信号、谈话时间线）供宿主做语义提炼。
+- `record_contact_enrichment`（确认文本 `record contact enrichment`）让宿主把提炼结果写回联系人的分类/标签/备注。
+- `create_outreach_drafts`（确认文本 `create outreach drafts`）把宿主为某个分群（例如"Kiwi 标签的联系人"）生成的个性化草稿写入 `outreach_drafts` 表，状态为 `draft`；你在面板「外联草稿箱」逐条批准（`approve`）后才会进入可发送状态，发送后标记 `sent`。
+- WSA 永远不自动发送消息。草稿的 `send_mode=computer_use` 仅表示你允许具备电脑操作（computer use）能力的宿主，在你批准后把该草稿代为输入微信；默认 `manual` 为手动复制发送。宿主应只处理 `status=approved` 且 `send_mode=computer_use` 的草稿。
+
+例如对宿主说"给 Kiwi 标签的联系人推一下 Kiwi 新版上线"，宿主会筛选联系人、逐个读取上下文、生成个性化草稿并写入草稿箱，等你逐条批准。
 
 OCR 数据采用“原始证据 + 可审计校正 + 派生候选”三层存储：`captures`、`ocr_observations` 保存采集证据，`perception_runs` 保存连接器/后端/稳定度，`message_candidates`、`participant_mentions`、`relation_events` 保存可确认的派生候选；原始 OCR 不会被覆盖。数据库 schema 当前为 v4。完整字段和迁移策略见 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -362,7 +394,7 @@ python3 -m wsa.cli export-obsidian --vault "$HOME/Documents/Obsidian Vault"
 python3 -m wsa.cli export-obsidian --date 2026-05-27
 ```
 
-联系人文件里的 `## 手工补充` 可以在 Obsidian 里编辑，支持 `公司`、`职位/角色`、`认识场景`、`标签`、`备注`、`下次跟进`。回读到本地数据库：
+联系人文件里的 `## 手工补充` 可以在 Obsidian 里编辑，支持 `分类`、`公司`、`职位/角色`、`认识场景`、`标签`、`备注`、`下次跟进`。回读到本地数据库：
 
 ```bash
 python3 -m wsa.cli import-obsidian --vault "$HOME/Documents/Obsidian Vault" --dry-run
@@ -431,7 +463,7 @@ python3 -m wsa.cli benchmark perception
 
 入库后，原始 observation 与 `message_candidates`、`participant_mentions`、`relation_events` 分开保存；候选记录默认保持 `candidate`，不会被分析引擎直接当成已确认事实。
 
-`--mode window` 默认使用 `--capture-backend auto`：优先用 ScreenCaptureKit 的指定窗口过滤器，只保存前台应用窗口帧；权限或 helper 不可用时回退到 `screencapture -l`。可用 `--capture-backend legacy` 强制旧路径；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。
+`--mode window` 默认使用 `--capture-backend auto`：优先用 ScreenCaptureKit 的指定窗口过滤器，只保存前台应用窗口帧；权限或 helper 不可用时回退到 `screencapture -l`。可用 `--capture-backend legacy` 强制旧路径；`--mode screen` 才会截取整个屏幕，后者仅作为显式 opt-in。`capture`、`quick-capture` 和 `watch` 都支持单次覆盖 `--captures-dir PATH`，通常直接使用 `captures-dir` 解析出的配置即可。
 截图采集完成后，命令行也会回显 `contact=... person=... signals=... image=...`，其中 `signals` 使用中文关系信号，没有信号时显示 `signals=无`，方便马上判断 OCR 入库是否有效。
 如果 OCR 文本和已有记录重复，`capture/watch` 会显示 `duplicate`；系统会把这次解析出的关系信号补回既有记录，避免旧库漏掉线索。已有记录缺少截图时会把新图片补挂上去并输出 `image_attached=...`，同时把该记录的证据时间、来源和联系人最近出现时间更新为这次截图；已有记录已经有可用截图时才删除这次刚截的新图片并输出 `duplicate_image_removed=...`，避免截图目录被重复画面撑大。
 
@@ -545,7 +577,7 @@ python3 -m wsa.cli reset --dry-run
 python3 -m wsa.cli reset --yes
 ```
 
-`reset` 只清空本工具的 SQLite 关系记忆和 `data/captures/` 里的截图图片，不会删除 `watch.log` 或其他非图片文件。
+`reset` 只清空本工具的 SQLite 关系记忆和当前/历史 WSA 管理截图目录里的图片，不会删除 `watch.log` 或其他非图片文件。
 
 连续处于非微信前台时，`watch` 会自动降低重复 skip 日志频率。默认每 30 次重复状态写一次心跳；如果想调得更密或更安静：
 
@@ -564,11 +596,15 @@ python3 -m wsa.cli watch --interval 60 --mode screen --quiet-skip-every 120
 data/social.db
 ```
 
-截图默认保存在：
+截图默认保存在配置解析出的 WSA capture 目录；macOS 本地 checkout 优先使用 iCloud Drive，
+无法使用 iCloud 时回退到：
 
 ```text
 data/captures/
 ```
+
+用 `python3 -m wsa.cli captures-dir`（或 `./start.sh captures-dir`）查看实际路径。`data/settings.json`
+只保存 watch 间隔和显式截图目录，不保存截图内容；已有截图不会因为切换配置被自动移动。
 
 ## 建议使用方式
 

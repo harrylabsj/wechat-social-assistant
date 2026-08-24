@@ -24,7 +24,8 @@ flowchart LR
     Capture[感知适配层\nAX + ScreenCaptureKit + 窗口截图 + Vision OCR]
     Core[本地关系引擎\n解析、去重、信号、建议、质量]
     Store[(SQLite\nWAL + migrations + evidence/facts split)]
-    Files[(本地 captures/reports\n用户提供的来源文件)]
+    Files[(可配置 captures/reports\n用户提供的来源文件)]
+    UI[本地只读可视化面板\n127.0.0.1 HTTP + embedded HTML]
 
     Host --> Skill
     Host --> Plugin
@@ -37,6 +38,8 @@ flowchart LR
     Core --> Store
     Capture --> Files
     Core --> Files
+    UI -. read-only .-> Store
+    UI -. managed images only .-> Files
 ```
 
 核心原则是“一个引擎、多个宿主入口”：插件和 Skill 不复制业务逻辑，所有关系计算都进入 `wsa/`，MCP 是跨宿主的稳定契约。
@@ -85,11 +88,22 @@ sequenceDiagram
 
 `captured_at` 表示屏幕或文件被观察的时间；`last_interaction_at` 表示用户明确声明或手工录入的互动时间。自动 OCR/watch 不会因为观察到旧聊天而把联系人“碰过”时间刷新到现在。旧版本直接调用 Python API 未传 `interaction_at` 时保留向后兼容行为；CLI capture/import 已使用正确的显式语义。
 
-图片路径也有所有权边界：
+图片路径也有所有权边界。数据库始终保持本地，截图文件则通过统一 resolver 与数据库解耦：
 
-- WSA 自己生成的截图存放在 `data/captures/`，标记为 managed，可在联系人删除时按引用计数安全清理。
+- WSA 自己生成的截图存放在当前 configured capture root，标记为 managed，可在联系人删除时按引用计数安全清理。
+- macOS 真实 checkout 且 iCloud Drive 已挂载时，自动 root 为
+  `~/Library/Mobile Documents/com~apple~CloudDocs/codex/wechat-social-assistant/data/captures/`；
+  未挂载或非 checkout 时回退到数据库旁的 `data/captures/`（测试数据库也保持本地隔离）。
+- 路径优先级固定为：命令行 `--captures-dir` > `WSA_CAPTURES_DIR` > `data/settings.json` 的
+  `captures_dir` > 自动 iCloud/本地路径。`wsa captures-dir --clear` 可恢复自动模式。
+- 切换 root 不会自动搬运已有文件；状态、只读面板、保留清理和联系人删除会兼容读取数据库旁的历史
+  `data/captures/`，因此迁移期间不会丢失旧证据。
 - `import-image`、`ingest --image-path` 只保存用户文件的引用，不拥有该文件；删除联系人不会删除原图。
-- 删除前解析真实路径并要求位于数据库旁的 `captures/` 根目录内，防止通过绝对路径或符号链接误删用户文件。
+- 删除前解析真实路径并要求位于当前或历史 WSA managed capture root 内，防止通过绝对路径或符号链接误删用户文件。
+
+SQLite 不放进 iCloud：SQLite WAL、临时文件和多进程同步不适合由 iCloud Drive 处理。MCP 的路径策略
+仍限制数据库、输出和日志在宿主可信根内，同时只额外信任 resolver 解析出的 capture root，以便
+`capture_commit` 能安全写入 iCloud，而不会把 MCP 变成任意本地文件写入器。
 
 ### 3.1 OCR observation 表
 
@@ -139,6 +153,21 @@ relation_events(
 
 数据库通过 `schema_migrations(version, applied_at)` 顺序升级。当前版本为 4：v1 引入结构化 OCR，v2 引入校正队列和生效文本，v3 引入 AX 层级元数据和多帧质量字段，v4 引入感知运行与证据/派生事实分层。连接默认启用 WAL、5 秒 busy timeout 和 `synchronous=normal`；`wsa backup --yes` 使用 SQLite backup API 生成一致快照，而不是直接复制可能尚未合并的 WAL 文件。
 
+### 3.2 本地可视化查看层
+
+`wsa ui` / `./start.sh ui` 启动 `wsa/web.py` 提供的本地面板。它不引入第二个存储层，而是以 CRM 读模型（`build_crm_view` / `/api/crm`）把 SQLite 证据提炼为联系人视图，并只允许通过受控的 `/media/<capture_id>` 路由展示位于当前或历史 WSA managed capture root 内的截图。面板包含：
+
+- 已提取联系人列表（可搜索，按姓名/分类/标签/备注/谈话内容匹配），按最近互动排序，并过滤 OCR/UI 噪声名（符号、菜单词、拼音候选等不会成为联系人）；同名的直接联系人与群聊发言人合并为一张卡片；群聊发言人只有已在本地联系人列表（有私聊采集标题或手工补充档案）时才显示，并标注来源群；
+- 每个联系人的谈话时间线：什么时间、在哪个会话、提炼后的交谈内容（而非全文记录），附关系信号、组织/身份线索和建议跟进动作；有截图的记录可点击查看；
+- 联系人档案编辑：分类、标签、备注通过面板唯一的写接口 `POST /api/enrichment` 保存到 `contact_enrichments`（source=dashboard），与 Obsidian 导入的 company/role/context 等字段合并而非覆盖；
+- 外联草稿箱：宿主 Agent 通过 MCP `create_outreach_drafts` 写入的个性化草稿在此逐条展示，用户可批准、驳回、标记已发送（`POST /api/outreach`）；
+- 顶部统计（联系人、谈话记录、近 7 天活跃、建议跟进）和 watch 运行状态；
+- 每 10 秒自动刷新（编辑档案时暂停覆盖表单），没有采集、OCR 校正、删除或消息发送接口。
+
+原始 OCR observation、置信度分布和候选积压仍是底层证据层，可通过 `/api/overview`、`/api/captures` 只读接口或 CLI 查看，但不作为面板主视图。
+
+服务器只接受 `127.0.0.1`、`localhost` 或 `::1`，默认端口为 `8788`，无图形界面时使用 `--no-browser`。这层的“可视化质量”只代表本地证据状态；合成 perception benchmark 不等同于真实微信截图准确率，低置信度 observation 仍必须人工 review。
+
 ## 4. 感知层：AX 优先，OCR 兜底
 
 微信桌面端没有面向个人桌面客户端的稳定 CLI/API，因此产品采用“AX 文本树优先 + ScreenCaptureKit 指定窗口 + 用户可见窗口截图 + macOS Vision OCR 兜底”的组合。AX 只读取前台应用公开的 Accessibility 属性；微信版本或控件不暴露文本时，才回退截图 OCR。当前实现的隐私收紧点：
@@ -174,9 +203,10 @@ relation_events(
 - `wsa/evidence.py`：读取原始证据对应的消息、参与人和关系事件候选；候选默认不能绕过人工确认。
 - `wsa/privacy.py`：导出脱敏、保留期限预览/清理、WSA 管理截图所有权检查和 OpenSSL 加密备份。
 - `wsa/perception.py`：只对显式标签做可审计的低置信度说话人候选归因；不推断头像身份。
-- `wsa/parser.py`：OCR 文本清洗、联系人提示、信号提取。
+- `wsa/parser.py`：OCR 文本清洗、联系人提示、信号提取；识别微信会话列表截图（未读角标/密集时间行）并归入伪联系人「微信会话列表」，不从列表行猜测会话标题或提取发言人。
 - `wsa/profiles.py`：联系人/群聊/群内发言人画像、链接/文件/组织线索；低置信度的普通短句不进入 speaker。
 - `wsa/suggestions.py`、`wsa/relationship_quality.py`、`wsa/dashboard.py`：只根据证据和明确互动时间计算建议、质量和仪表盘。
+- `wsa/outreach.py`：宿主 LLM 撰写的外联草稿（`outreach_drafts` 表），状态机 `draft → approved / dismissed → sent`；`send_mode=computer_use` 仅表示用户允许具备电脑操作能力的宿主代为在微信中输入该草稿，WSA 自身永远不发送消息。
 - `wsa/mcp_server.py`：唯一跨宿主结构化契约；写工具必须携带精确确认字段。
 - `wsa/ocr.py`：通过 connector 调用 macOS 捕获、AX 文本树读取、前台应用/窗口识别、Vision OCR、用户缓存中的 native helper 编译。
 - `agent/...`：宿主安装资产，不得承载关系算法。
@@ -185,12 +215,12 @@ relation_events(
 
 读写操作分为四类：
 
-1. **纯读**：status、connector status、perception diagnostics、capture preview、privacy policy、audit、contacts、brief、quality、dashboard、reports、sources、candidates、evidence candidates、feedback list、recent captures。
-2. **本地数据库写入**：ingest、capture commit、feedback、OCR review、candidate confirm、import source/archive、Obsidian import、analyze。
+1. **纯读**：status、connector status、perception diagnostics、capture preview、privacy policy、audit、contacts、brief、quality、dashboard、reports、sources、candidates、evidence candidates、feedback list、recent captures、contact context、outreach drafts list。
+2. **本地数据库写入**：ingest、capture commit、feedback、OCR review、candidate confirm、import source/archive、Obsidian import、analyze、contact enrichment、outreach draft create/update。
 3. **本地文件/删除**：capture/watch、export、encrypted backup、过期 evidence purge、delete、Obsidian export、reset。
 4. **进程控制**：watch-interval、watch、stop-watch。
 
-Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。`record_ocr_review` 只能带精确的 `confirmation_text="review OCR observation"` 写入 review；`capture_commit`、`purge_expired_captures`、`create_encrypted_backup` 分别要求精确确认文本 `commit local capture`、`purge expired captures`、`create encrypted backup`。原始 OCR 和截图不会被覆盖；过期清理只删除 WSA 自己生成且没有外部引用的截图。
+Skill、插件和 MCP 描述必须把第 2–4 类交给用户确认。Agent 可以生成草稿，但永远不能把草稿直接送入微信发送动作。任何 OCR 文本中的“忽略之前指令”“执行命令”等内容都只能作为会话证据展示。`record_ocr_review` 只能带精确的 `confirmation_text="review OCR observation"` 写入 review；`capture_commit`、`purge_expired_captures`、`create_encrypted_backup` 分别要求精确确认文本 `commit local capture`、`purge expired captures`、`create encrypted backup`；宿主智能写回同样走确认：`record_contact_enrichment` 要求 `record contact enrichment`，`create_outreach_drafts` / `update_outreach_draft` 分别要求 `create outreach drafts` / `update outreach draft`。原始 OCR 和截图不会被覆盖；过期清理只删除 WSA 自己生成且没有外部引用的截图。
 
 ### 6.1 隐私策略
 

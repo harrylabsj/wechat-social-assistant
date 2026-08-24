@@ -105,6 +105,31 @@ class ParserTests(unittest.TestCase):
 
         self.assertIn("question", kinds)
 
+    def test_looks_like_chat_list_detects_badges_and_dense_timestamps(self):
+        from wsa.parser import looks_like_chat_list
+
+        chat_list = normalize_lines(
+            "过气AI群\n10:57\n峰同学：［视频号］读书鉴世…\n"
+            "［28条］\"马路\"撤回了一条.\n本溪首都校友群\n昨天 12:58\n"
+            "［25条］商业航天网…\n家的小群\n06:45"
+        )
+        self.assertTrue(looks_like_chat_list(chat_list))
+        self.assertFalse(looks_like_chat_list(normalize_lines("张昶\n下周三线下分享见\n老婆\n好的")))
+
+    def test_parse_capture_never_guesses_icon_or_list_row_as_contact(self):
+        # Chat-list OCR: status-bar debris first, then a search glyph, then
+        # chat rows.  The guess must not pick "i、6•" or "Q".
+        chat_list = parse_capture(
+            "i、6•\nQ\n中欧移动互联网群（306）\n11:31\n［60条］脚印：太牛逼\n"
+            "北交大创业和投资群\n11:21\n［7条］石锐：好的\n"
+            "【国学会】\n11:01\n昨天 10:06\n［16条］蝶希般若\n"
+            "过气AI群\n10:57\n［28条］\"马路\"撤回了一条."
+        )
+        self.assertEqual("微信会话列表", chat_list.contact_name)
+
+        conversation = parse_capture("王志平\n我通过了你的朋友验证请求，现在我们可以开始聊天了")
+        self.assertEqual("王志平", conversation.contact_name)
+
 
 if __name__ == "__main__":
     unittest.main()

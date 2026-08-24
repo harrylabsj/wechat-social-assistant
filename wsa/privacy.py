@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 from typing import Any
 
+from .settings import capture_storage_roots
 from .store import connect, init_db, now_iso
 
 
@@ -124,7 +125,7 @@ def purge_expired_captures(
             (cutoff,),
         ).fetchall()
         capture_ids = [int(row["id"]) for row in rows]
-        screenshots = _owned_unshared_images(conn, rows, db.parent / "captures")
+        screenshots = _owned_unshared_images(conn, rows, capture_storage_roots(db))
         if not dry_run and capture_ids:
             placeholders = ", ".join("?" for _ in capture_ids)
             conn.execute(f"delete from captures where id in ({placeholders})", capture_ids)
@@ -222,7 +223,7 @@ def _cutoff_iso(retention_days: int, as_of: str | None) -> str:
     return (reference.astimezone(timezone.utc) - timedelta(days=retention_days)).isoformat(timespec="seconds")
 
 
-def _owned_unshared_images(conn, rows, managed_root: Path) -> list[Path]:
+def _owned_unshared_images(conn, rows, managed_roots: tuple[Path, ...]) -> list[Path]:
     candidates: list[Path] = []
     capture_ids = [int(row["id"]) for row in rows]
     if not capture_ids:
@@ -232,9 +233,7 @@ def _owned_unshared_images(conn, rows, managed_root: Path) -> list[Path]:
         if not row["image_path"] or not bool(row["image_managed"]):
             continue
         path = Path(str(row["image_path"])).expanduser().resolve(strict=False)
-        try:
-            path.relative_to(managed_root.expanduser().resolve(strict=False))
-        except (OSError, ValueError):
+        if not any(_is_relative_to(path, root) for root in managed_roots):
             continue
         references = int(
             conn.execute(
@@ -245,3 +244,11 @@ def _owned_unshared_images(conn, rows, managed_root: Path) -> list[Path]:
         if references == 0 and path.is_file():
             candidates.append(path)
     return candidates
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.expanduser().resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    return True

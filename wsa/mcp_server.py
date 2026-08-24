@@ -51,6 +51,14 @@ from .feedback import (
     record_feedback,
     render_feedback_markdown,
 )
+from .outreach import (
+    CREATE_CONFIRMATION_TEXT as OUTREACH_CREATE_CONFIRMATION_TEXT,
+    UPDATE_CONFIRMATION_TEXT as OUTREACH_UPDATE_CONFIRMATION_TEXT,
+    create_outreach_drafts,
+    list_outreach_drafts,
+    outreach_to_dict,
+    update_outreach_draft,
+)
 from .profiles import ContactProfile, build_profiles
 from .privacy import (
     DEFAULT_PASSPHRASE_ENV,
@@ -77,6 +85,7 @@ from .security import (
     configure_mcp_path_policy,
     resolve_mcp_path,
 )
+from .settings import resolve_captures_dir
 from .sources import (
     SOURCE_TYPES,
     list_relationship_sources,
@@ -86,6 +95,7 @@ from .sources import (
 from .status import StatusReport, build_status_report, render_status_report
 from .store import connect, default_db_path, init_db, list_ocr_observations
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
+from .web import build_crm_view, save_contact_meta
 
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
@@ -189,6 +199,7 @@ MCP_TOOLS = [
                     "description": "Must exactly equal: commit local capture",
                 },
                 "db_path": {"type": "string", "description": "Optional path to social.db."},
+                "captures_dir": {"type": "string", "description": "Optional screenshot directory; defaults to configured iCloud/local path."},
             },
             "additionalProperties": False,
         },
@@ -511,6 +522,131 @@ MCP_TOOLS = [
         },
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
     },
+    {
+        "name": "list_contacts",
+        "description": "List CRM contacts with optional tag/category/kind/query filters. Group speakers appear only when they are already known contacts (direct chat or manual profile).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Name, category, tag, source chat, or content keyword."},
+                "kind": {"type": "string", "enum": ["direct", "speaker"]},
+                "tag": {"type": "string", "description": "Filter by one tag from the contact profile."},
+                "category": {"type": "string", "description": "Filter by category (分类) from the contact profile."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+    },
+    {
+        "name": "get_contact_context",
+        "description": "Read one contact's full context packet for host-side LLM reasoning: profile (category/tags/notes), source chats, signals, next action, and the distilled conversation timeline.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["contact_name"],
+            "properties": {
+                "contact_name": {"type": "string", "description": "Contact name (spacing-insensitive)."},
+                "timeline_limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 12},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+    },
+    {
+        "name": "record_contact_enrichment",
+        "description": "Write a contact's category/tags/notes after explicit user confirmation; merges with existing profile fields instead of replacing them.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["person_name", "confirmed", "confirmation_text"],
+            "properties": {
+                "person_name": {"type": "string", "description": "Contact name to update."},
+                "category": {"type": "string", "description": "分类, e.g. 家人/朋友/同事/客户. Empty clears it."},
+                "tags": {"type": "string", "description": "Comma-separated 标签. Empty clears them."},
+                "notes": {"type": "string", "description": "备注. Empty clears it."},
+                "confirmed": {"type": "boolean", "description": "Must be true after user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": "Must exactly equal: record contact enrichment",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
+    {
+        "name": "create_outreach_drafts",
+        "description": "Write host-LLM-authored outreach drafts for a contact segment after explicit user confirmation. Drafts stay in status=draft until the user approves them; WSA never sends messages. send_mode=computer_use marks drafts the user allows a computer-use-capable host to type into WeChat on their behalf.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["items", "confirmed", "confirmation_text"],
+            "properties": {
+                "campaign": {"type": "string", "description": "Campaign slug, e.g. kiwi-release."},
+                "topic": {"type": "string", "description": "What this push is about."},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["person_name", "draft_text"],
+                        "properties": {
+                            "person_name": {"type": "string"},
+                            "draft_text": {"type": "string"},
+                            "send_mode": {"type": "string", "enum": ["manual", "computer_use"], "default": "manual"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "confirmed": {"type": "boolean", "description": "Must be true after user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": f"Must exactly equal: {OUTREACH_CREATE_CONFIRMATION_TEXT}",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
+    {
+        "name": "list_outreach_drafts",
+        "description": "Read outreach drafts with optional status/campaign/contact filters. Hosts with computer-use capability should only act on status=approved drafts with send_mode=computer_use.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["draft", "approved", "dismissed", "sent"]},
+                "campaign": {"type": "string"},
+                "person_name": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+    },
+    {
+        "name": "update_outreach_draft",
+        "description": "Move one outreach draft through approve/dismiss/edit/mark_sent after explicit user confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["draft_id", "action", "confirmed", "confirmation_text"],
+            "properties": {
+                "draft_id": {"type": "integer", "minimum": 1},
+                "action": {"type": "string", "enum": ["approve", "dismiss", "edit", "mark_sent"]},
+                "draft_text": {"type": "string", "description": "Required when action=edit."},
+                "note": {"type": "string"},
+                "confirmed": {"type": "boolean", "description": "Must be true after user confirmation."},
+                "confirmation_text": {
+                    "type": "string",
+                    "description": f"Must exactly equal: {OUTREACH_UPDATE_CONFIRMATION_TEXT}",
+                },
+                "db_path": {"type": "string", "description": "Optional path to social.db."},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    },
 ]
 
 MCP_RESOURCES = [
@@ -723,6 +859,12 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
         "get_capture_observations": _tool_get_capture_observations,
         "list_ocr_reviews": _tool_list_ocr_reviews,
         "record_ocr_review": _tool_record_ocr_review,
+        "list_contacts": _tool_list_contacts,
+        "get_contact_context": _tool_get_contact_context,
+        "record_contact_enrichment": _tool_record_contact_enrichment,
+        "create_outreach_drafts": _tool_create_outreach_drafts,
+        "list_outreach_drafts": _tool_list_outreach_drafts,
+        "update_outreach_draft": _tool_update_outreach_draft,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -978,6 +1120,22 @@ def _tool_capture_commit(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("capture_commit capture_backend must be auto, screencapturekit, or legacy")
     stable_frames = max(1, min(5, int(arguments.get("stable_frames") or 2)))
     db_path = _db_path(arguments)
+    captures_value = arguments.get("captures_dir")
+    captures_dir = (
+        resolve_mcp_path(
+            Path(str(captures_value)).expanduser(),
+            default=Path(str(captures_value)).expanduser(),
+            label="captures_dir",
+            base=db_path.parent,
+        )
+        if captures_value
+        else resolve_mcp_path(
+            resolve_captures_dir(db_path),
+            default=resolve_captures_dir(db_path),
+            label="captures_dir",
+            base=db_path.parent,
+        )
+    )
     args = argparse.Namespace(
         command="capture",
         db=db_path,
@@ -988,6 +1146,7 @@ def _tool_capture_commit(arguments: dict[str, Any]) -> dict[str, Any]:
         crop_preset=str(arguments.get("crop_preset") or "none"),
         stable_frames=stable_frames,
         capture_backend=backend,
+        captures_dir=captures_dir,
     )
     outcome = _capture_once(args)
     match = re.search(r"capture=(\d+)", outcome.output_line)
@@ -1499,6 +1658,217 @@ def _tool_record_ocr_review(arguments: dict[str, Any]) -> dict[str, Any]:
         text,
         {"review": review_to_dict(review), "capture_text_changed": result.capture_text_changed},
     )
+
+
+def _crm_contacts(db_path: Path, *, timeline_limit: int = 3) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    view = build_crm_view(db_path, timeline_limit=timeline_limit)
+    return [contact for contact in view.get("contacts", []) if isinstance(contact, dict)]
+
+
+def _contact_compact_dict(contact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": contact.get("name"),
+        "kind": contact.get("kind"),
+        "kind_label": contact.get("kind_label"),
+        "category": contact.get("category") or "",
+        "tags": contact.get("tags") or "",
+        "notes": contact.get("notes") or "",
+        "source_chats": contact.get("source_chats") or [],
+        "last_interaction_at": contact.get("last_interaction_at"),
+        "interaction_count": contact.get("interaction_count"),
+        "summary": contact.get("summary"),
+    }
+
+
+def _tool_list_contacts(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    query = str(arguments.get("query") or "").strip().lower()
+    kind = _optional_str(arguments.get("kind"))
+    tag = _optional_str(arguments.get("tag"))
+    category = _optional_str(arguments.get("category"))
+    limit = _limit(arguments.get("limit"), default=50)
+
+    def matches(contact: dict[str, Any]) -> bool:
+        if kind and contact.get("kind") != kind:
+            return False
+        if category and str(contact.get("category") or "") != category:
+            return False
+        if tag:
+            tags = [item.strip() for item in re.split(r"[,，]", str(contact.get("tags") or "")) if item.strip()]
+            if tag not in tags:
+                return False
+        if query:
+            haystack = "\n".join(
+                [
+                    str(contact.get("name") or ""),
+                    str(contact.get("category") or ""),
+                    str(contact.get("tags") or ""),
+                    str(contact.get("notes") or ""),
+                    " ".join(str(chat) for chat in contact.get("source_chats") or []),
+                    str(contact.get("summary") or ""),
+                ]
+            ).lower()
+            if query not in haystack:
+                return False
+        return True
+
+    matched = [contact for contact in _crm_contacts(db_path) if matches(contact)][:limit]
+    lines = ["# 联系人列表", ""]
+    for contact in matched:
+        parts = [str(contact.get("name") or ""), str(contact.get("kind_label") or "")]
+        if contact.get("category"):
+            parts.append(f"分类：{contact['category']}")
+        if contact.get("tags"):
+            parts.append(f"标签：{contact['tags']}")
+        chats = [chat for chat in contact.get("source_chats") or [] if chat != contact.get("name")]
+        if chats:
+            parts.append(f"来源群：{'、'.join(str(chat) for chat in chats)}")
+        parts.append(f"最近互动：{contact.get('last_interaction_at') or '—'}")
+        lines.append("- " + "；".join(part for part in parts if part))
+    if not matched:
+        lines.append("暂无匹配的联系人。")
+    return _tool_result(
+        "\n".join(lines),
+        {
+            "count": len(matched),
+            "contacts": [_contact_compact_dict(contact) for contact in matched],
+        },
+    )
+
+
+def _tool_get_contact_context(arguments: dict[str, Any]) -> dict[str, Any]:
+    db_path = _db_path(arguments)
+    contact_name = str(arguments.get("contact_name") or "").strip()
+    if not contact_name:
+        raise ValueError("get_contact_context requires contact_name")
+    timeline_limit = _limit(arguments.get("timeline_limit"), default=12)
+    normalized = re.sub(r"\s+", "", contact_name)
+    contact = next(
+        (
+            item
+            for item in _crm_contacts(db_path, timeline_limit=timeline_limit)
+            if re.sub(r"\s+", "", str(item.get("name") or "")) == normalized
+        ),
+        None,
+    )
+    if contact is None:
+        return _tool_result(
+            f"未找到联系人「{contact_name}」。可先用 list_contacts 浏览当前已提取的联系人。",
+            {"contact": None},
+        )
+    lines = [f"# 联系人上下文：{contact.get('name')}", ""]
+    lines.append(f"- 类型：{contact.get('kind_label') or contact.get('kind')}")
+    if contact.get("category"):
+        lines.append(f"- 分类：{contact['category']}")
+    if contact.get("tags"):
+        lines.append(f"- 标签：{contact['tags']}")
+    if contact.get("notes"):
+        lines.append(f"- 备注：{contact['notes']}")
+    chats = [chat for chat in contact.get("source_chats") or [] if chat != contact.get("name")]
+    if chats:
+        lines.append(f"- 来源群：{'、'.join(str(chat) for chat in chats)}")
+    if contact.get("organizations"):
+        lines.append(f"- 组织线索：{'、'.join(str(org) for org in contact['organizations'])}")
+    if contact.get("identity_hints"):
+        lines.append(f"- 身份线索：{'、'.join(str(hint) for hint in contact['identity_hints'])}")
+    action = contact.get("next_action") or {}
+    if action.get("action"):
+        lines.append(f"- 建议动作：{action['action']}（{action.get('why') or '—'}）")
+    lines.append("")
+    lines.append("## 谈话时间线")
+    for event in contact.get("timeline") or []:
+        where = f"（{event.get('source_chat')}）" if event.get("source_chat") else ""
+        lines.append(f"- [{event.get('captured_at') or '—'}]{where} {event.get('summary') or ''}")
+    return _tool_result("\n".join(lines), {"contact": contact})
+
+
+def _tool_record_contact_enrichment(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("confirmed") is not True or arguments.get("confirmation_text") != "record contact enrichment":
+        raise ValueError("record_contact_enrichment requires confirmed=true and confirmation_text='record contact enrichment'")
+    result = save_contact_meta(
+        _db_path(arguments),
+        person_name=str(arguments.get("person_name") or ""),
+        updates={key: str(arguments.get(key) or "") for key in ("category", "tags", "notes")},
+    )
+    fields = result.get("fields", {})
+    text = (
+        "# 已保存联系人档案\n\n"
+        f"- 联系人：{result.get('person_name')}\n"
+        f"- 分类：{fields.get('category') or '—'}\n"
+        f"- 标签：{fields.get('tags') or '—'}\n"
+        f"- 备注：{fields.get('notes') or '—'}\n"
+    )
+    return _tool_result(text, result)
+
+
+def _tool_create_outreach_drafts(arguments: dict[str, Any]) -> dict[str, Any]:
+    items = arguments.get("items")
+    if not isinstance(items, list):
+        raise ValueError("create_outreach_drafts requires items to be an array")
+    created = create_outreach_drafts(
+        _db_path(arguments),
+        items=items,
+        campaign=str(arguments.get("campaign") or ""),
+        topic=str(arguments.get("topic") or ""),
+        confirmed=arguments.get("confirmed") is True,
+        confirmation_text=str(arguments.get("confirmation_text") or ""),
+    )
+    lines = ["# 已创建外联草稿", ""]
+    if created:
+        lines.append(f"- campaign：{created[0].campaign or '—'}；主题：{created[0].topic or '—'}")
+    lines.append(f"- 数量：{len(created)}（状态均为 draft，需逐条 approve 后才可发送）")
+    lines.append("")
+    for draft in created:
+        preview = draft.draft_text if len(draft.draft_text) <= 80 else draft.draft_text[:79] + "…"
+        lines.append(f"- #{draft.id} {draft.person_name}（{draft.send_mode}）：{preview}")
+    return _tool_result(
+        "\n".join(lines),
+        {"count": len(created), "drafts": [outreach_to_dict(draft) for draft in created]},
+    )
+
+
+def _tool_list_outreach_drafts(arguments: dict[str, Any]) -> dict[str, Any]:
+    drafts = list_outreach_drafts(
+        _db_path(arguments),
+        status=_optional_str(arguments.get("status")),
+        campaign=_optional_str(arguments.get("campaign")),
+        person_name=_optional_str(arguments.get("person_name")),
+        limit=_limit(arguments.get("limit"), default=200),
+    )
+    lines = ["# 外联草稿", ""]
+    for draft in drafts:
+        preview = draft.draft_text if len(draft.draft_text) <= 80 else draft.draft_text[:79] + "…"
+        lines.append(
+            f"- #{draft.id} [{draft.status}] {draft.person_name}"
+            f"（{draft.campaign or '—'} / {draft.send_mode}）：{preview}"
+        )
+    if not drafts:
+        lines.append("暂无匹配的外联草稿。")
+    return _tool_result(
+        "\n".join(lines),
+        {"count": len(drafts), "drafts": [outreach_to_dict(draft) for draft in drafts]},
+    )
+
+
+def _tool_update_outreach_draft(arguments: dict[str, Any]) -> dict[str, Any]:
+    draft = update_outreach_draft(
+        _db_path(arguments),
+        draft_id=int(arguments.get("draft_id") or 0),
+        action=str(arguments.get("action") or ""),
+        draft_text=_optional_str(arguments.get("draft_text")),
+        note=_optional_str(arguments.get("note")),
+        confirmed=arguments.get("confirmed") is True,
+        confirmation_text=str(arguments.get("confirmation_text") or ""),
+    )
+    text = (
+        "# 已更新外联草稿\n\n"
+        f"- 草稿：#{draft.id}（{draft.person_name}）\n"
+        f"- 状态：{draft.status}\n"
+        f"- 发送方式：{draft.send_mode}\n"
+    )
+    return _tool_result(text, {"draft": outreach_to_dict(draft)})
 
 
 def _profiles_or_empty(db_path: Path) -> list[ContactProfile]:

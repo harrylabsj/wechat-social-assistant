@@ -20,7 +20,7 @@
       },
       "allowedRoot": {
         "type": "string",
-        "description": "Trusted root for MCP database, screenshots, and log paths; defaults to the database directory."
+        "description": "Trusted root for MCP database and log paths; the configured WSA capture root may additionally be an iCloud Drive directory. Defaults to the database directory."
       },
       "pythonPath": {
         "type": "string",

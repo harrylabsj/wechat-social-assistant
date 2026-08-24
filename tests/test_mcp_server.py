@@ -45,6 +45,12 @@ class MCPServerContractTests(unittest.TestCase):
                 "get_capture_observations",
                 "list_ocr_reviews",
                 "record_ocr_review",
+                "list_contacts",
+                "get_contact_context",
+                "record_contact_enrichment",
+                "create_outreach_drafts",
+                "list_outreach_drafts",
+                "update_outreach_draft",
             ],
             tool_names,
         )
@@ -407,6 +413,102 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual(-32602, rejected["error"]["code"])
         self.assertEqual("confirmed", accepted["structuredContent"]["candidate"]["status"])
         self.assertEqual("张三", accepted["structuredContent"]["candidate"]["name"])
+
+    def test_list_contacts_and_get_contact_context_read_crm_view(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            listed = _call_tool("list_contacts", db_path=db_path)
+            context = _call_tool("get_contact_context", db_path=db_path, contact_name="王五")
+            missing = _call_tool("get_contact_context", db_path=db_path, contact_name="不存在的人")
+
+        contacts = listed["structuredContent"]["contacts"]
+        names = [contact["name"] for contact in contacts]
+        self.assertIn("王五", names)
+        # 张三 is only a group speaker and not yet a known contact, so the CRM
+        # view hides him until he gets a direct capture or a manual profile.
+        self.assertNotIn("张三", names)
+        self.assertEqual("王五", context["structuredContent"]["contact"]["name"])
+        self.assertIn("timeline", context["structuredContent"]["contact"])
+        self.assertIsNone(missing["structuredContent"]["contact"])
+
+    def test_record_contact_enrichment_requires_confirmation_and_merges(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            rejected = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "record_contact_enrichment",
+                        "arguments": {"db_path": str(db_path), "person_name": "张三", "tags": "Kiwi"},
+                    },
+                }
+            )
+            accepted = _call_tool(
+                "record_contact_enrichment",
+                db_path=db_path,
+                person_name="张三",
+                category="朋友",
+                tags="Kiwi",
+                confirmed=True,
+                confirmation_text="record contact enrichment",
+            )
+            listed = _call_tool("list_contacts", db_path=db_path, tag="Kiwi")
+
+        self.assertEqual(-32602, rejected["error"]["code"])
+        self.assertEqual("Kiwi", accepted["structuredContent"]["fields"]["tags"])
+        self.assertEqual(
+            ["张三"], [c["name"] for c in listed["structuredContent"]["contacts"]]
+        )
+
+    def test_outreach_draft_tools_require_confirmation_and_follow_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "data" / "social.db"
+            _seed_relationship_data(db_path)
+
+            rejected = mcp_server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_outreach_drafts",
+                        "arguments": {
+                            "db_path": str(db_path),
+                            "items": [{"person_name": "张三", "draft_text": "Kiwi 新版上线了"}],
+                        },
+                    },
+                }
+            )
+            created = _call_tool(
+                "create_outreach_drafts",
+                db_path=db_path,
+                campaign="kiwi-release",
+                topic="Kiwi 新版上线",
+                items=[{"person_name": "张三", "draft_text": "Kiwi 新版上线了，想你用得上。"}],
+                confirmed=True,
+                confirmation_text="create outreach drafts",
+            )
+            draft_id = created["structuredContent"]["drafts"][0]["id"]
+            approved = _call_tool(
+                "update_outreach_draft",
+                db_path=db_path,
+                draft_id=draft_id,
+                action="approve",
+                confirmed=True,
+                confirmation_text="update outreach draft",
+            )
+            listed = _call_tool("list_outreach_drafts", db_path=db_path, status="approved")
+
+        self.assertEqual(-32602, rejected["error"]["code"])
+        self.assertEqual("draft", created["structuredContent"]["drafts"][0]["status"])
+        self.assertEqual("approved", approved["structuredContent"]["draft"]["status"])
+        self.assertEqual([draft_id], [d["id"] for d in listed["structuredContent"]["drafts"]])
 
     def test_module_cli_help_is_available(self):
         result = subprocess.run(

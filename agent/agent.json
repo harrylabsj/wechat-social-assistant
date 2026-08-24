@@ -49,7 +49,13 @@
       "list_recent_captures",
       "get_capture_observations",
       "list_ocr_reviews",
-      "record_ocr_review"
+      "record_ocr_review",
+      "list_contacts",
+      "get_contact_context",
+      "record_contact_enrichment",
+      "create_outreach_drafts",
+      "list_outreach_drafts",
+      "update_outreach_draft"
     ],
     "resources": [
       "wsa://status",
@@ -69,7 +75,7 @@
       "relationship-candidate-review",
       "safe-capture-review"
     ],
-    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'; capture_commit needs confirmation_text='commit local capture'; purge_expired_captures needs confirmation_text='purge expired captures' when dry_run=false; create_encrypted_backup needs confirmation_text='create encrypted backup'. The MCP launcher restricts db_path, output_path, captures_dir, and log_file to WSA_ALLOWED_ROOT."
+    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'; record_contact_enrichment needs confirmation_text='record contact enrichment'; create_outreach_drafts needs confirmation_text='create outreach drafts'; update_outreach_draft needs confirmation_text='update outreach draft'; capture_commit needs confirmation_text='commit local capture'; purge_expired_captures needs confirmation_text='purge expired captures' when dry_run=false; create_encrypted_backup needs confirmation_text='create encrypted backup'. WSA never sends messages: outreach drafts only become sendable when the user approves them, and send_mode=computer_use merely allows a computer-use-capable host to type an approved draft into WeChat on the user's behalf. The MCP launcher restricts db_path, output_path, and log_file to WSA_ALLOWED_ROOT and also trusts the configured WSA capture root (which may be iCloud)."
   },
   "openclaw_plugin": {
     "manifest": "agent/openclaw/wechat-social-assistant-plugin/openclaw.plugin.json",
@@ -93,6 +99,7 @@
     "daily_analysis",
     "weekly_analysis",
     "relationship_dashboard",
+    "collection_quality_dashboard",
     "relationship_cockpit",
     "multi_source_inputs",
     "wechat_archive_manifest_import",
@@ -117,7 +124,9 @@
     "evidence_candidate_tables",
     "capture_preview_commit",
     "privacy_retention_redaction",
-    "encrypted_backup"
+    "encrypted_backup",
+    "configurable_capture_storage",
+    "icloud_capture_storage_on_macos"
   ],
   "commands": [
     {
@@ -189,6 +198,11 @@
       "name": "dashboard",
       "mode": "read",
       "example": "python3 -m wsa.cli dashboard"
+    },
+    {
+      "name": "ui",
+      "mode": "read-local-server",
+      "example": "python3 -m wsa.cli ui --no-browser"
     },
     {
       "name": "cockpit",
@@ -293,6 +307,12 @@
       "example": "python3 -m wsa.cli watch-interval 10"
     },
     {
+      "name": "captures-dir",
+      "mode": "read-or-write-settings",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli captures-dir --create"
+    },
+    {
       "name": "watch",
       "mode": "capture",
       "requires_confirmation": true,
@@ -310,7 +330,7 @@
     "database": "data/social.db by default",
     "manual_enrichment": "contact_enrichments rows inside data/social.db",
     "relationship_sources": "relationship_sources rows inside data/social.db from user-provided local files and safe WeChat archive manifest metadata",
-    "screenshots": "data/captures by default",
+    "screenshots": "configurable; macOS checkouts automatically use iCloud Drive at ~/Library/Mobile Documents/com~apple~CloudDocs/codex/wechat-social-assistant/data/captures when mounted, otherwise data/captures",
     "reads_wechat_database": false,
     "sends_messages": false,
     "requires_user_confirmation_for_writes": true,

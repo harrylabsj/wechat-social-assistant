@@ -100,3 +100,5 @@
 - Upgrade SQLite schema to v4 with `perception_runs`, `message_candidates`, `participant_mentions`, and `relation_events`; raw OCR evidence remains separate from candidate/confirmed/rejected derived facts.
 - Add MCP `get_perception_diagnostics`, `capture_preview`/`capture_commit`, `list_evidence_candidates`, privacy policy, retention purge, and encrypted-backup tools with exact confirmation text for mutations.
 - Make JSON export redacted by default, add deterministic phone/email/URL redaction, 90-day retention preview/purge, managed-image ownership checks, and OpenSSL AES-256-CBC + PBKDF2 encrypted backups.
+- Add `wsa ui` / `./start.sh ui`: a loopback-only, read-only collection quality dashboard for capture timeline, screenshots, OCR confidence, review backlog, connector readiness, and structured candidate backlog.
+- Decouple screenshot storage from SQLite: add `wsa captures-dir`, environment/settings overrides, macOS iCloud Drive auto-storage with local fallback, and legacy local-root compatibility for status, dashboard, retention, and deletion.

@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -70,7 +71,13 @@ from .sources import (
     list_relationship_sources,
     render_relationship_sources_markdown,
 )
-from .settings import load_settings, save_watch_interval, settings_path_for_db
+from .settings import (
+    load_settings,
+    resolve_captures_dir,
+    save_captures_dir,
+    save_watch_interval,
+    settings_path_for_db,
+)
 from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
 from .store import (
     EmptyCaptureError,
@@ -87,6 +94,7 @@ from .store import (
 )
 from .suggestions import build_suggestions, followup_strength_label, render_markdown
 from .timefmt import format_display_time
+from .web import DEFAULT_PORT, serve_dashboard
 from .wechat_archive import (
     default_wechat_archive_manifest,
     delete_wechat_archive_sources,
@@ -218,6 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--contact", help="Contact name hint.")
     capture.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     capture.add_argument("--source", default="ocr")
+    capture.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
     capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     capture.add_argument(
@@ -242,6 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     quick_capture.add_argument("--contact", help="Contact name hint.")
     quick_capture.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     quick_capture.add_argument("--source", default="hotkey")
+    quick_capture.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
     quick_capture.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     quick_capture.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     quick_capture.add_argument(
@@ -411,9 +421,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Summarize database, screenshots, and watch log state.")
     status.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
-    status.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
+    status.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
     status.add_argument("--as-of", help="Analysis timestamp for recency scoring. Defaults to now.")
     status.set_defaults(func=cmd_status)
+
+    ui = sub.add_parser(
+        "ui",
+        aliases=["web"],
+        help="Start the loopback-only read-only collection quality dashboard.",
+    )
+    ui.add_argument("--host", default="127.0.0.1", help="Loopback host only (default: 127.0.0.1).")
+    ui.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Dashboard port (default: {DEFAULT_PORT}).")
+    ui.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
+    ui.add_argument("--log-file", type=Path, help="Watch log path. Defaults to DB directory/watch.log.")
+    ui.add_argument("--no-browser", action="store_true", help="Start the server without opening a browser window.")
+    ui.set_defaults(func=cmd_ui)
 
     audit = sub.add_parser("audit", help="Render a local data audit report.")
     audit.add_argument("--out", type=Path)
@@ -461,6 +483,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch_interval.add_argument("seconds", type=int, nargs="?", help="New default interval in seconds. Minimum is 5.")
     watch_interval.set_defaults(func=cmd_watch_interval)
+
+    captures_dir = sub.add_parser(
+        "captures-dir",
+        aliases=["capture-dir"],
+        help="Show or set the screenshot storage directory.",
+    )
+    captures_dir.add_argument("path", type=Path, nargs="?", help="New directory. Omit to show the resolved directory.")
+    captures_dir.add_argument("--clear", action="store_true", help="Clear the saved override and return to automatic iCloud/local mode.")
+    captures_dir.add_argument("--create", action="store_true", help="Create the resolved directory after showing/saving it.")
+    captures_dir.set_defaults(func=cmd_captures_dir)
 
     reset = sub.add_parser("reset", help="Clear local database rows and captured screenshots.")
     reset.add_argument("--yes", action="store_true", help="Actually clear data. Required unless --dry-run is used.")
@@ -525,7 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     weekly.add_argument("--limit", type=int, default=20, help="Maximum follow-ups in the weekly report.")
     weekly.add_argument("--out", type=Path)
     weekly.add_argument("--log-file", type=Path, help="Watch debug log path. Defaults to DB directory/watch.log.")
-    weekly.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to DB directory/captures.")
+    weekly.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
     weekly.set_defaults(func=cmd_weekly_report)
 
     watch = sub.add_parser("watch", help="Explicitly watch the frontmost WeChat window and ingest changed OCR text.")
@@ -534,6 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--mode", choices=["screen", "window", "accessibility"], default="window")
     watch.add_argument("--app", action="append", default=None)
     watch.add_argument("--source", default="watch")
+    watch.add_argument("--captures-dir", type=Path, help="Screenshot directory. Defaults to configured iCloud/local path.")
     watch.add_argument("--crop", help="Crop captured image before OCR as x,y,width,height.")
     watch.add_argument("--crop-preset", choices=["none", "wechat-chat"], default="none")
     watch.add_argument(
@@ -637,8 +670,9 @@ def cmd_quick_capture(args: argparse.Namespace) -> int:
 
 def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
+    captures_dir = resolve_captures_dir(args.db, getattr(args, "captures_dir", None))
     use_accessibility = args.mode == "accessibility"
-    image_path = None if use_accessibility else next_capture_path(root)
+    image_path = None if use_accessibility else next_capture_path(root, captures_dir=captures_dir)
     capture_frames = 1
     capture_stability = 1.0
     perception_connector = "manual"
@@ -671,7 +705,7 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                 # untrusted tree must not make capture unusable.  Fall back
                 # to the existing frontmost-window Vision OCR path and make
                 # the source explicit in the database.
-                image_path = next_capture_path(root)
+                image_path = next_capture_path(root, captures_dir=captures_dir)
                 capture_screenshot(
                     image_path,
                     mode="window",
@@ -705,6 +739,16 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             capture_detail = f"image={image_path}"
             perception_connector = "macos-window-capture" if args.mode == "window" else "macos-screen-capture"
             perception_backend = getattr(args, "capture_backend", "legacy")
+        if getattr(args, "command", None) == "watch":
+            # ScreenCaptureKit re-resolves the frontmost app at capture time,
+            # so the user may have switched away from WeChat between the watch
+            # loop's check and the actual frame grab.  Re-verify before ingest
+            # so another app's window (e.g. Finder) is never stored as WeChat
+            # evidence.  The watch-mode error path removes the stray image.
+            current_app = frontmost_app_status().name
+            target_apps = args.app or ["WeChat", "微信"]
+            if current_app and current_app not in target_apps:
+                raise CaptureError(f"frontmost app changed during capture: {current_app}")
         result = ingest_capture(
             args.db,
             raw_text=text,
@@ -1249,9 +1293,25 @@ def cmd_feedback_list(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
+    report = build_status_report(
+        args.db,
+        log_file=args.log_file,
+        captures_dir=resolve_captures_dir(args.db, args.captures_dir),
+        as_of=args.as_of,
+    )
     print(render_status_report(report), end="")
     return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    return serve_dashboard(
+        args.db,
+        captures_dir=resolve_captures_dir(args.db, args.captures_dir),
+        log_file=args.log_file,
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+    )
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -1349,10 +1409,44 @@ def cmd_watch_interval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_captures_dir(args: argparse.Namespace) -> int:
+    if args.clear and args.path is not None:
+        print("captures-dir error: use PATH or --clear, not both", file=sys.stderr)
+        return 2
+    try:
+        if args.path is not None:
+            settings = save_captures_dir(args.db, args.path)
+        elif args.clear:
+            settings = save_captures_dir(args.db, None)
+        else:
+            settings = load_settings(args.db)
+        resolved = resolve_captures_dir(args.db)
+        if args.create:
+            resolved.mkdir(parents=True, exist_ok=True)
+    except (OSError, ValueError) as exc:
+        print(f"captures-dir error: {exc}", file=sys.stderr)
+        return 2
+    if os.environ.get("WSA_CAPTURES_DIR"):
+        source = "env"
+    elif settings.captures_dir:
+        source = "settings"
+    else:
+        source = "auto"
+    print(
+        f"captures_dir={resolved} source={source} "
+        f"settings={_display_settings_path(args.db)}"
+    )
+    return 0
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     if not args.yes and not args.dry_run:
         raise SystemExit("Use --yes to clear database rows and screenshots, or --dry-run to preview.")
-    result = reset_memory(args.db, captures_dir=args.captures_dir, dry_run=args.dry_run)
+    result = reset_memory(
+        args.db,
+        captures_dir=resolve_captures_dir(args.db, args.captures_dir),
+        dry_run=args.dry_run,
+    )
     prefix = "dry-run" if result.dry_run else "reset complete"
     print(
         f"{prefix}: people={result.removed_people} "
@@ -1371,7 +1465,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     init_db(args.db)
     refresh_capture_signals(args.db)
     refresh_derived_people(args.db)
-    report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
+    report = build_status_report(
+        args.db,
+        log_file=args.log_file,
+        captures_dir=resolve_captures_dir(args.db, args.captures_dir),
+        as_of=args.as_of,
+    )
     profiles = build_profiles(args.db, limit=_pre_filter_profile_limit(args.contact, args.limit))
     matched_profiles = _filter_profiles(profiles, args.contact)
     matched_profile_count = len(matched_profiles)
@@ -1488,7 +1587,7 @@ def cmd_export_obsidian(args: argparse.Namespace) -> int:
     status_report = build_status_report(
         args.db,
         log_file=Path(args.db).parent / "watch.log",
-        captures_dir=Path(args.db).parent / "captures",
+        captures_dir=resolve_captures_dir(args.db),
         as_of=args.as_of,
     )
     report_path = reports_dir / f"{report_date}.md"
@@ -1586,7 +1685,12 @@ def cmd_weekly_report(args: argparse.Namespace) -> int:
     report_date = _obsidian_report_date(args.date)
     profiles = build_profiles(args.db)
     followups = build_suggestions(args.db, as_of=args.as_of, limit=args.limit, min_score=args.min_score)
-    status_report = build_status_report(args.db, log_file=args.log_file, captures_dir=args.captures_dir, as_of=args.as_of)
+    status_report = build_status_report(
+        args.db,
+        log_file=args.log_file,
+        captures_dir=resolve_captures_dir(args.db, args.captures_dir),
+        as_of=args.as_of,
+    )
     filename_by_name = _obsidian_filename_map(profile.name for profile in profiles)
     markdown = _render_obsidian_weekly_report(
         report_date,

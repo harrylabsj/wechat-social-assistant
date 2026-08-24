@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .settings import resolve_captures_dir
+
 
 class PathPolicyError(ValueError):
     """Raised when an MCP path escapes its configured trusted root."""
@@ -25,9 +27,32 @@ def mcp_path_policy_enabled() -> bool:
 
 
 def mcp_allowed_root(*, base: Path | str | None = None) -> Path:
+    return mcp_allowed_roots(base=base)[0]
+
+
+def mcp_allowed_roots(*, base: Path | str | None = None) -> tuple[Path, ...]:
+    """Return configured roots plus the selected database's managed capture root.
+
+    WSA may intentionally keep screenshots in an iCloud directory outside the
+    checkout.  That configured capture root is trusted for capture/media paths
+    while arbitrary paths outside ``WSA_ALLOWED_ROOT`` remain rejected.
+    """
+
     configured = os.environ.get("WSA_ALLOWED_ROOT")
-    root = Path(configured).expanduser() if configured else Path(base or Path.cwd())
-    return root.resolve(strict=False)
+    if configured:
+        roots = [Path(item).expanduser() for item in configured.split(os.pathsep) if item]
+    else:
+        roots = [Path(base or Path.cwd())]
+    if base is not None:
+        base_path = Path(base).expanduser()
+        db_candidate = base_path if base_path.name == "social.db" else base_path / "social.db"
+        roots.append(resolve_captures_dir(db_candidate))
+    deduped: list[Path] = []
+    for root in roots:
+        resolved = root.resolve(strict=False)
+        if resolved not in deduped:
+            deduped.append(resolved)
+    return tuple(deduped)
 
 
 def resolve_mcp_path(
@@ -44,14 +69,19 @@ def resolve_mcp_path(
     if not mcp_path_policy_enabled():
         return resolved
 
-    root = mcp_allowed_root(base=base)
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise PathPolicyError(
-            f"{label} must stay under the configured WSA_ALLOWED_ROOT ({root})"
-        ) from exc
+    roots = mcp_allowed_roots(base=base)
+    if not any(_is_relative_to(resolved, root) for root in roots):
+        joined = ", ".join(str(root) for root in roots)
+        raise PathPolicyError(f"{label} must stay under a configured trusted root ({joined})")
     return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def configure_mcp_path_policy(*, root: Path | str | None = None) -> Path:

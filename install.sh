@@ -103,6 +103,9 @@ fi
 echo "Initializing the local SQLite database..."
 (cd "$WSA_ROOT" && "$WSA_VENV_PYTHON" -m wsa.cli init)
 
+echo "Preparing screenshot storage (iCloud on macOS when available)..."
+(cd "$WSA_ROOT" && "$WSA_VENV_PYTHON" -m wsa.cli captures-dir --create)
+
 echo "Running the WSA environment doctor..."
 PATH="$WSA_VENV/bin:$PATH" "$WSA_VENV_PYTHON" \
   "$WSA_ROOT/agent/hermes/wechat-social-assistant/scripts/doctor.py" \
@@ -114,12 +117,16 @@ WSA installation complete.
 
 Virtual environment: $WSA_VENV
 Database:            $WSA_ROOT/data/social.db
+Screenshots:         configured WSA capture directory (macOS auto-uses iCloud when available)
 
 Start foreground WeChat capture:
   WSA_VENV_DIR="$WSA_VENV" "$WSA_ROOT/start.sh"
 
 Check status without starting capture:
   WSA_VENV_DIR="$WSA_VENV" "$WSA_ROOT/start.sh" status
+
+Inspect or change screenshot storage:
+  WSA_VENV_DIR="$WSA_VENV" "$WSA_ROOT/start.sh" captures-dir
 
 Start the MCP stdio server for an MCP host:
   WSA_VENV_DIR="$WSA_VENV" "$WSA_ROOT/start.sh" mcp

@@ -285,6 +285,52 @@ class WatchLogTests(unittest.TestCase):
         self.assertIn("action=error", log_text)
         self.assertIn("empty capture text", log_text)
 
+    def test_watch_discards_capture_when_frontmost_app_changes_during_capture(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            log_file = root / "data" / "watch.log"
+            image_path = root / "data" / "captures" / "finder.png"
+            args = build_parser().parse_args(
+                [
+                    "--db",
+                    str(db_path),
+                    "watch",
+                    "--interval",
+                    "5",
+                    "--log-file",
+                    str(log_file),
+                ]
+            )
+
+            def fake_capture(path, *_args, **_kwargs):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"finder window, not wechat")
+
+            frontmost_sequence = [
+                SimpleNamespace(name="微信", method="swift", detail="ok"),
+                SimpleNamespace(name="访达", method="swift", detail="ok"),
+            ]
+            with (
+                patch("wsa.cli.frontmost_app_status", side_effect=frontmost_sequence),
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.capture_screenshot", side_effect=fake_capture),
+                patch("wsa.cli.ocr_image", return_value="名称\n修改日期\n最近使用"),
+                patch("wsa.cli.time.sleep", side_effect=KeyboardInterrupt),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                cmd_watch(args)
+
+            log_text = log_file.read_text(encoding="utf-8")
+
+        # The wrong-app frame is discarded before ingest and its image removed.
+        self.assertFalse(image_path.exists())
+        self.assertIn("action=error", log_text)
+        self.assertIn("frontmost app changed during capture: 访达", log_text)
+        self.assertNotIn("action=capture", log_text)
+
 
 if __name__ == "__main__":
     unittest.main()

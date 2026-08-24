@@ -9,6 +9,8 @@ from pathlib import Path
 
 READ_COMMANDS = {
     "status",
+    "ui",
+    "web",
     "audit",
     "contacts",
     "feedback-list",
@@ -26,6 +28,8 @@ READ_COMMANDS = {
     "connectors",
     "benchmark",
     "privacy",
+    "captures-dir",
+    "capture-dir",
 }
 WRITE_COMMANDS = {
     "init",
@@ -85,6 +89,10 @@ def _requires_confirmation(command: str, args: list[str]) -> bool:
         return True
     if command == "candidates" and "--sync" in args[1:]:
         return True
+    if command in {"captures-dir", "capture-dir"}:
+        # Showing the resolved path is read-only; saving an override, clearing
+        # it, or creating the directory changes local state/files.
+        return bool(args[1:])
     return command == "privacy" and args[1:2] == ["purge"] and "--yes" in args[1:]
 
 

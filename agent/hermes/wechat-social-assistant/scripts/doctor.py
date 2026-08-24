@@ -63,7 +63,14 @@ def _run_checks(root: Path, *, db_path: Path | None, obsidian_vault: Path | None
     if db_path is None:
         db_path = root / "data" / "social.db"
     checks.append(_path_check("database_path", db_path, required=False))
-    checks.append(_path_check("captures_dir", db_path.parent / "captures", required=False))
+    sys.path.insert(0, str(root))
+    try:
+        from wsa.settings import resolve_captures_dir
+
+        captures_dir = resolve_captures_dir(db_path)
+    except Exception:
+        captures_dir = db_path.parent / "captures"
+    checks.append(_path_check("captures_dir", captures_dir, required=False))
     if obsidian_vault is not None:
         checks.append(_path_check("obsidian_vault", obsidian_vault, required=False))
     return checks

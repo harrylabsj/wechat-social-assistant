@@ -9,6 +9,7 @@ import sqlite3
 
 from .parser import Signal, extract_signals, parse_capture
 from .observations import OCRObservation, normalize_observations
+from .settings import capture_storage_roots, resolve_captures_dir
 
 
 class EmptyCaptureError(ValueError):
@@ -19,7 +20,7 @@ class DatabaseMigrationError(RuntimeError):
     """Raised when a database is newer than the running WSA schema."""
 
 _AUTO_INTERACTION = object()
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 SCHEMA = """
@@ -202,6 +203,19 @@ create table if not exists contact_enrichments (
     updated_at text not null
 );
 
+create table if not exists outreach_drafts (
+    id integer primary key autoincrement,
+    person_name text not null,
+    campaign text not null default '',
+    topic text not null default '',
+    draft_text text not null,
+    send_mode text not null default 'manual',
+    status text not null default 'draft',
+    note text not null default '',
+    created_at text not null,
+    updated_at text not null
+);
+
 create table if not exists relationship_sources (
     id integer primary key autoincrement,
     person_name text not null,
@@ -247,6 +261,12 @@ on contact_enrichments(person_name);
 
 create index if not exists idx_relationship_sources_person_time
 on relationship_sources(person_name, occurred_at);
+
+create index if not exists idx_outreach_drafts_status
+on outreach_drafts(status, updated_at);
+
+create index if not exists idx_outreach_drafts_person
+on outreach_drafts(person_name);
 
 create index if not exists idx_relationship_sources_type_time
 on relationship_sources(source_type, occurred_at);
@@ -551,7 +571,7 @@ def reset_memory(
     dry_run: bool = False,
 ) -> ResetResult:
     db = Path(db_path)
-    screenshots = Path(captures_dir) if captures_dir is not None else db.parent / "captures"
+    screenshots = resolve_captures_dir(db, captures_dir)
     init_db(db)
 
     with connect(db) as conn:
@@ -572,7 +592,7 @@ def reset_memory(
             conn.execute("delete from relationship_sources")
             conn.commit()
 
-    screenshot_files = _screenshot_files(screenshots)
+    screenshot_files = _unique_screenshot_files(capture_storage_roots(db, captures_dir))
     if not dry_run:
         for path in screenshot_files:
             path.unlink(missing_ok=True)
@@ -756,6 +776,7 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
         2: _migration_v2_ocr_reviews,
         3: _migration_v3_perception_metadata,
         4: _migration_v4_evidence_and_derived_facts,
+        5: _migration_v5_outreach_drafts,
     }
     for version in range(current + 1, SCHEMA_VERSION + 1):
         migrations[version](conn)
@@ -922,7 +943,6 @@ def _create_evidence_tables(conn: sqlite3.Connection) -> None:
 
 def _migration_v4_evidence_and_derived_facts(conn: sqlite3.Connection) -> None:
     """Split acquisition evidence from reviewable derived relationship facts."""
-
     _create_evidence_tables(conn)
 
     # Existing captures were already ingested before the split.  Backfill
@@ -946,6 +966,33 @@ def _migration_v4_evidence_and_derived_facts(conn: sqlite3.Connection) -> None:
             current_time=now_iso(),
             error=None,
         )
+
+
+def _migration_v5_outreach_drafts(conn: sqlite3.Connection) -> None:
+    """Add host-authored outreach drafts with an auditable status lifecycle."""
+
+    conn.execute(
+        """
+        create table if not exists outreach_drafts (
+            id integer primary key autoincrement,
+            person_name text not null,
+            campaign text not null default '',
+            topic text not null default '',
+            draft_text text not null,
+            send_mode text not null default 'manual',
+            status text not null default 'draft',
+            note text not null default '',
+            created_at text not null,
+            updated_at text not null
+        )
+        """
+    )
+    conn.execute(
+        "create index if not exists idx_outreach_drafts_status on outreach_drafts(status, updated_at)"
+    )
+    conn.execute(
+        "create index if not exists idx_outreach_drafts_person on outreach_drafts(person_name)"
+    )
 
 
 def _backfill_ocr_observations(conn: sqlite3.Connection) -> None:
@@ -1161,12 +1208,25 @@ def _screenshot_files(path: Path) -> list[Path]:
     return sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
 
 
+def _unique_screenshot_files(paths: tuple[Path, ...]) -> list[Path]:
+    seen: set[Path] = set()
+    files: list[Path] = []
+    for path in paths:
+        for item in _screenshot_files(path):
+            resolved = item.resolve(strict=False)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(item)
+    return sorted(files)
+
+
 def _is_managed_capture_path(db_path: Path | str, image_path: str | None) -> bool:
     if not image_path:
         return False
     try:
         candidate = Path(image_path).expanduser().resolve(strict=False)
-        root = (Path(db_path).expanduser().resolve(strict=False).parent / "captures").resolve(strict=False)
+        root = resolve_captures_dir(db_path).resolve(strict=False)
         candidate.relative_to(root)
     except (OSError, ValueError):
         return False

@@ -284,6 +284,7 @@ const WRITE_TOOLS = [
         capture_backend: { type: 'string', enum: ['auto', 'screencapturekit', 'legacy'] },
         stable_frames: { type: 'integer', minimum: 1, maximum: 5 },
         contact_name: { type: 'string' }, source: { type: 'string' }, crop: { type: 'string' }, crop_preset: { type: 'string' },
+        captures_dir: { type: 'string', description: 'Optional configured screenshot directory; defaults to WSA iCloud/local resolution.' },
         confirmed: { type: 'boolean' }, confirmation_text: { type: 'string' },
       },
       required: ['confirmed', 'confirmation_text'],

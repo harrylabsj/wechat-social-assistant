@@ -14,6 +14,8 @@ Use the `wsa_*` tools exposed by the native plugin when available; otherwise att
 - Start with `wsa_status` or `wsa_audit`; use `wsa_perception_diagnostics`, `wsa_capture_preview`, `wsa_evidence_candidates`, and `wsa_privacy_policy` before mutating anything. Prefer read tools and show evidence, timestamps, uncertainty, and editable drafts.
 - Ask for explicit user confirmation before capture/watch, imports, exports, retention purge, encrypted backup, deletion, report writes, feedback writes, OCR review writes, candidate confirmation, or process control. `wsa_capture_preview` itself does not read the screen.
 - `trustedWrites` is false by default. Enabling it never bypasses the MCP confirmation fields for `wsa_capture_commit`, `wsa_record_feedback`, `wsa_confirm_relationship_candidate`, `wsa_record_ocr_review`, `wsa_purge_expired_captures`, or `wsa_create_encrypted_backup`.
+- For human-facing collection inspection, the host can launch `./start.sh ui --no-browser`; the loopback-only dashboard is read-only and is intentionally outside the plugin's write surface.
+- Screenshot storage is configurable through the CLI (`wsa captures-dir`); on a macOS checkout the automatic root is iCloud Drive when mounted, while SQLite remains local. Treat `captures-dir PATH`, `--clear`, and `--create` as confirmed local settings/filesystem writes.
 
 ## Workflow
 

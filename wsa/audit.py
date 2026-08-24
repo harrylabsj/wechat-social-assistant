@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .privacy import redact_payload
+from .settings import capture_storage_roots, resolve_captures_dir
 from .store import connect, init_db, now_iso
 
 
@@ -78,7 +79,7 @@ def build_audit_report(db_path: Path | str) -> AuditReport:
         table_counts=counts,
         data_paths={
             "database": str(db),
-            "captures": str(db.parent / "captures"),
+            "captures": str(resolve_captures_dir(db)),
             "reports": str(db.parent.parent / "reports") if db.parent.name == "data" else str(db.parent / "reports"),
         },
     )
@@ -149,7 +150,7 @@ def delete_contact_data(
     if not name:
         raise ValueError("person_name is required")
     with connect(db_path) as conn:
-        impact = _delete_contact_impact(conn, name, managed_root=Path(db_path).expanduser().resolve(strict=False).parent / "captures")
+        impact = _delete_contact_impact(conn, name, managed_roots=capture_storage_roots(db_path))
         if not dry_run:
             _delete_contact_rows(conn, name, impact["person_ids"], impact["capture_ids"])
             conn.commit()
@@ -210,10 +211,10 @@ def _table_rows(conn, table: str) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(f"select * from {table} order by id").fetchall()]
 
 
-def _delete_contact_impact(conn, name: str, *, managed_root: Path) -> dict[str, Any]:
+def _delete_contact_impact(conn, name: str, *, managed_roots: tuple[Path, ...]) -> dict[str, Any]:
     person_ids = [int(row["id"]) for row in conn.execute("select id from people where name = ?", (name,)).fetchall()]
     capture_ids = _capture_ids(conn, person_ids)
-    screenshot_paths = _unshared_capture_image_paths(conn, capture_ids, managed_root=managed_root)
+    screenshot_paths = _unshared_capture_image_paths(conn, capture_ids, managed_roots=managed_roots)
     return {
         "person_ids": person_ids,
         "capture_ids": capture_ids,
@@ -260,7 +261,7 @@ def _capture_ids(conn, person_ids: list[int]) -> list[int]:
     ]
 
 
-def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_root: Path) -> list[Path]:
+def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_roots: tuple[Path, ...]) -> list[Path]:
     if not capture_ids:
         return []
     placeholders = ", ".join("?" for _ in capture_ids)
@@ -283,9 +284,7 @@ def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_root:
             continue
         image_path = str(row["image_path"])
         path = Path(image_path).expanduser().resolve(strict=False)
-        try:
-            path.relative_to(managed_root.expanduser().resolve(strict=False))
-        except (OSError, ValueError):
+        if not any(_is_relative_to(path, root) for root in managed_roots):
             # Imported/user-owned images are references, not files managed by WSA.
             continue
         other_refs = int(
@@ -302,6 +301,14 @@ def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_root:
         if other_refs == 0 and path.is_file():
             result.append(path)
     return result
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.expanduser().resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _count_by_ids(conn, table: str, column: str, ids: list[int]) -> int:

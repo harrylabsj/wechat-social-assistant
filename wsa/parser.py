@@ -109,6 +109,29 @@ def is_noise_line(line: str) -> bool:
     return any(pattern.match(cleaned) for pattern in NOISE_PATTERNS)
 
 
+CHAT_LIST_BADGE_RE = re.compile(r"^[［\[]\s*\d+\s*条[］\]]")
+
+
+def looks_like_chat_list(lines: list[str]) -> bool:
+    """True when OCR text is the WeChat chat list instead of a conversation.
+
+    Chat-list screenshots carry an unread badge ("［28条］") and a timestamp on
+    nearly every row, while a real conversation window shows only a few time
+    dividers.  Treating the list as a conversation derives phantom speakers
+    from contact-name rows, so callers use this to skip speaker attribution.
+    """
+
+    badges = 0
+    timestamps = 0
+    for raw in lines:
+        line = re.sub(r"\s+", " ", str(raw)).strip()
+        if CHAT_LIST_BADGE_RE.match(line):
+            badges += 1
+        elif TIME_RE.match(line):
+            timestamps += 1
+    return badges >= 2 or timestamps >= 6
+
+
 def extract_signals(text: str) -> list[Signal]:
     signals: list[Signal] = []
     seen: set[str] = set()
@@ -177,10 +200,20 @@ def parse_capture(raw_text: str, contact_hint: str | None = None) -> ParsedCaptu
 
 
 def _guess_contact_name(lines: list[str]) -> str:
+    if looks_like_chat_list(lines):
+        # The OCR stream is the chat list, not a conversation: there is no
+        # window title to read, so attribute it to a clearly-labelled pseudo
+        # contact instead of the first chat row or a status-bar icon.
+        return "微信会话列表"
     for line in lines:
-        if TIME_RE.match(line):
+        if TIME_RE.match(line) or is_noise_line(line) or CHAT_LIST_BADGE_RE.match(line):
             continue
         if len(line) > 24:
+            continue
+        # Skip OCR debris such as status-bar junk ("i、6•") and the search
+        # glyph ("Q"): a chat title needs at least one CJK character or a
+        # multi-letter Latin word.
+        if not re.search(r"[一-鿿]", line) and not re.search(r"[A-Za-z]{2,}", line):
             continue
         return line
     return "未知联系人"

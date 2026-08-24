@@ -5,6 +5,8 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 ## Read-Only First
 
 - `wsa status` - inspect database, screenshots, logs, and watch state.
+- `wsa ui` - open the loopback-only read-only collection quality dashboard (use `--no-browser` on headless hosts).
+- `wsa captures-dir` - show the resolved screenshot directory and whether it comes from an environment override, settings, or automatic iCloud/local fallback.
 - `wsa audit` - inspect local table counts and storage paths.
 - `wsa connectors` - inspect AX, ScreenCaptureKit, window, and screen capture availability.
 - `wsa benchmark perception` - run privacy-safe AX/speaker/stability regression fixtures.
@@ -29,7 +31,7 @@ Use these commands through the local `wsa` CLI. Prefer read-only commands before
 - `wsa-mcp` - run the MCP stdio server when the package console script is installed.
 - `python3 -m wsa.mcp_server` - run the same MCP server from a source checkout.
 
-The v1.4 MCP server adds read-only `get_perception_diagnostics`, `capture_preview`, `list_evidence_candidates`, and `get_privacy_policy`; `capture_commit`, `purge_expired_captures`, and `create_encrypted_backup` are confirmation-gated writes alongside `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`. Exact confirmation text is documented in the tool schema. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
+The v1.4 MCP server adds read-only `get_perception_diagnostics`, `capture_preview`, `list_evidence_candidates`, and `get_privacy_policy`; `capture_commit`, `purge_expired_captures`, and `create_encrypted_backup` are confirmation-gated writes alongside `record_feedback`, `confirm_relationship_candidate`, and `record_ocr_review`. Host-intelligence tools: read-only `list_contacts` (tag/category filters) and `get_contact_context` (full contact context packet), plus confirmation-gated writes `record_contact_enrichment` (`record contact enrichment`), `create_outreach_drafts` (`create outreach drafts`), and `update_outreach_draft` (`update outreach draft`). Outreach drafts follow a draft→approved→sent lifecycle; WSA never sends messages, and `send_mode=computer_use` only marks user-approved drafts a computer-use host may type into WeChat. Exact confirmation text is documented in the tool schema. The launcher restricts file paths to `WSA_ALLOWED_ROOT`.
 
 ## Confirm Before Running
 
@@ -50,6 +52,7 @@ The v1.4 MCP server adds read-only `get_perception_diagnostics`, `capture_previe
 - `wsa capture --contact NAME --mode window` - captures the frontmost window and runs Vision OCR.
 - `wsa capture --contact NAME --mode accessibility` - reads two stable AX frames first and automatically falls back to window OCR when AX is unavailable, empty, or unstable. Use `--stable-frames 1` for a single frame.
 - `wsa quick-capture` - immediately captures the current screen with shortcut-friendly defaults.
+- `wsa captures-dir PATH --create` - save an explicit screenshot directory; `wsa captures-dir --clear` restores automatic iCloud/local resolution. Ask for confirmation before changing it.
 - `wsa watch-interval 10` - saves the default polling interval for future `wsa watch` runs that omit `--interval`.
 - `wsa watch --interval 60` - starts explicit foreground WeChat polling.
 - `wsa stop-watch` - stops matching local watch processes.

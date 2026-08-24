@@ -7,7 +7,7 @@ import re
 
 from .enrichment import ContactEnrichment, enrichment_by_person
 from .observations import OCRObservation
-from .parser import TIME_RE, extract_signals, is_noise_line
+from .parser import TIME_RE, extract_signals, is_noise_line, looks_like_chat_list
 from .sources import RelationshipSource, sources_by_person
 from .store import connect
 from .timefmt import format_display_time
@@ -359,7 +359,7 @@ def is_meaningful_content_line(line: str) -> bool:
 
 
 def extract_speakers(lines: list[str], *, chat_name: str) -> list[str]:
-    if not is_group_chat_name(chat_name):
+    if not is_group_chat_name(chat_name) or looks_like_chat_list(lines):
         return []
     counts: dict[str, int] = defaultdict(int)
     for index, line in enumerate(lines[:-1]):
@@ -399,6 +399,8 @@ def annotate_speaker_candidates(
 
 
 def speaker_message_map(lines: list[str], *, chat_name: str) -> dict[str, list[str]]:
+    if looks_like_chat_list(lines):
+        return {}
     messages: dict[str, list[str]] = defaultdict(list)
     current_speaker: str | None = None
     for line in lines:
@@ -556,6 +558,7 @@ def _apply_enrichment(builder: _ProfileBuilder, enrichment: ContactEnrichment) -
         builder.add_organizations([company])
     hints = []
     for key, label in (
+        ("category", "分类"),
         ("role", "职位/角色"),
         ("context", "认识场景"),
         ("tags", "标签"),

@@ -31,6 +31,11 @@ SQLite tables:
 - `capture_signals`: deterministic cues such as schedule, project, birthday, and needs-reply.
 - `schema_migrations`: ordered database migration history.
 
+SQLite remains local. WSA-generated screenshot files use the resolver described in
+`docs/architecture.md`: macOS checkouts prefer the iCloud Drive project directory,
+with `WSA_CAPTURES_DIR`, `data/settings.json`, and `--captures-dir` available for
+explicit overrides; unavailable iCloud falls back to `data/captures`.
+
 ## Safety
 
-The default interaction is human-in-the-loop. The most automated mode still only observes the screen and writes local records. MCP file paths are constrained to a trusted root, and SQLite backups use the backup API. Network calls, automatic messaging, and WeChat database access are intentionally out of scope.
+The default interaction is human-in-the-loop. The most automated mode still only observes the screen and writes local records. MCP database/output/log paths are constrained to a trusted root, with only the resolver-selected capture root additionally allowed for screenshot writes; SQLite backups use the backup API. Network calls, automatic messaging, and WeChat database access are intentionally out of scope.

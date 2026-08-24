@@ -58,6 +58,7 @@ class AgentPackageTests(unittest.TestCase):
             command_names,
             {
                 "status",
+                "ui",
                 "connectors",
                 "audit",
                 "export-data",
@@ -83,6 +84,7 @@ class AgentPackageTests(unittest.TestCase):
                 "import-image",
                 "quick-capture",
                 "capture",
+                "captures-dir",
                 "watch-interval",
                 "watch",
                 "stop-watch",
@@ -147,6 +149,7 @@ class AgentPackageTests(unittest.TestCase):
 
         self.assertEqual(0, runner_result.returncode, runner_result.stderr)
         self.assertIn("status", runner_result.stdout)
+        self.assertIn("ui", runner_result.stdout)
         self.assertIn("audit", runner_result.stdout)
         self.assertIn("export-data", runner_result.stdout)
         self.assertIn("delete-contact", runner_result.stdout)
@@ -165,6 +168,7 @@ class AgentPackageTests(unittest.TestCase):
         self.assertIn("export-obsidian", runner_result.stdout)
         self.assertIn("quick-capture", runner_result.stdout)
         self.assertIn("watch-interval", runner_result.stdout)
+        self.assertIn("captures-dir", runner_result.stdout)
 
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("wechat-social-assistant", installer_text)

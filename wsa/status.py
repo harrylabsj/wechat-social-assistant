@@ -10,6 +10,7 @@ import subprocess
 
 from .parser import extract_signals
 from .profiles import build_profiles
+from .settings import capture_storage_roots, resolve_captures_dir
 from .store import connect, init_db
 from .suggestions import build_suggestions, followup_strength_label
 from .timefmt import format_display_time
@@ -51,7 +52,7 @@ def build_status_report(
 ) -> StatusReport:
     db = Path(db_path)
     log = Path(log_file) if log_file is not None else db.parent / "watch.log"
-    screenshots = Path(captures_dir) if captures_dir is not None else db.parent / "captures"
+    screenshots = resolve_captures_dir(db, captures_dir)
 
     if db.exists():
         # Status is read-only from the user's perspective, but opening an old
@@ -102,7 +103,7 @@ def build_status_report(
         latest_source=latest_source,
         latest_image_path=latest_image_path,
         captures_dir=screenshots,
-        screenshot_count=_count_screenshots(screenshots),
+        screenshot_count=sum(_count_screenshots(root) for root in capture_storage_roots(db, captures_dir)),
         log_file=log,
         log_exists=log.exists(),
         log_line_count=_count_log_lines(log),

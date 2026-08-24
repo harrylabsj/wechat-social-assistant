@@ -257,9 +257,10 @@ def frontmost_window_id() -> int:
     return window_id
 
 
-def next_capture_path(root: Path | str) -> Path:
+def next_capture_path(root: Path | str, *, captures_dir: Path | str | None = None) -> Path:
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
-    return Path(root) / "captures" / f"wechat-{timestamp}.png"
+    directory = Path(captures_dir) if captures_dir is not None else Path(root) / "captures"
+    return directory / f"wechat-{timestamp}.png"
 
 
 def parse_crop_spec(spec: str) -> CropRegion:
