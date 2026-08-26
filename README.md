@@ -1,8 +1,32 @@
 # WeChat Social Assistant
 
+[![PyPI](https://img.shields.io/pypi/v/wechat-social-assistant)](https://pypi.org/project/wechat-social-assistant/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 本地优先的微信社交记录助手 MVP：从电脑版微信的可见窗口截图，使用 macOS 系统 OCR 识别文字，写入本地 SQLite，并生成关系跟进建议。
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
+
+项目以 Apache-2.0 开源。源码仓库包含 Hermes Skill、OpenClaw 插件等 Agent 适配器；PyPI 发布包只包含可安装的 `wsa` 代码、Swift 源码和无个人数据的测试 fixture。本地数据库、截图、日志和报告不会进入 Git 或 PyPI。
+
+## 从 PyPI 安装
+
+在 macOS 上推荐使用独立虚拟环境（Python 3.11+）：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade wechat-social-assistant
+wsa init
+```
+
+如果需要完整源码、Hermes Skill 或 OpenClaw 插件，请使用仓库安装器：
+
+```bash
+git clone https://github.com/harrylabsj/wechat-social-assistant.git
+cd wechat-social-assistant
+./install.sh
+```
 
 ## Agent 生态（v1.4）
 

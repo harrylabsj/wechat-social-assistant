@@ -2,7 +2,28 @@
 name = "wechat-social-assistant"
 version = "1.4.0"
 description = "Local-first WeChat relationship memory assistant."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "HaiDong Jiang"}]
 requires-python = ">=3.11"
+keywords = ["wechat", "crm", "relationship-memory", "ocr", "mcp", "agent"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Office/Business",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.urls]
+Homepage = "https://github.com/harrylabsj/wechat-social-assistant"
+Repository = "https://github.com/harrylabsj/wechat-social-assistant"
+Issues = "https://github.com/harrylabsj/wechat-social-assistant/issues"
+Changelog = "https://github.com/harrylabsj/wechat-social-assistant/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=68"]
