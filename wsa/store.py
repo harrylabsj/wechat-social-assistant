@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -337,6 +338,9 @@ class ClosingConnection(sqlite3.Connection):
 
 
 def default_db_path(root: Path | None = None) -> Path:
+    configured = os.environ.get("WSA_DB")
+    if configured:
+        return Path(configured).expanduser().resolve(strict=False)
     base = root or Path.cwd()
     return base / "data" / "social.db"
 

@@ -2,6 +2,16 @@
 
 All notable changes to WeChat Social Assistant are documented here.
 
+## 1.4.2 - 2026-08-26
+
+- Added a standalone one-line installer for PyPI users without a source
+  checkout; it creates the data directory, virtual environment, shell env,
+  database, and local screenshot directory.
+- Made `WSA_DB` a supported default database override for installed CLI/MCP
+  commands.
+- Kept iCloud capture storage opt-in for standalone users via `--icloud` or
+  `WSA_USE_ICLOUD=1`; local storage is the default.
+
 ## 1.4.1 - 2026-08-26
 
 - Removed machine-specific path sentinels from the public test suite and

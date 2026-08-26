@@ -2,12 +2,19 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wsa.observations import OCRObservation
-from wsa.store import EmptyCaptureError, connect, ingest_capture, init_db, list_ocr_observations, reset_memory
+from wsa.store import EmptyCaptureError, connect, default_db_path, ingest_capture, init_db, list_ocr_observations, reset_memory
 
 
 class StoreTests(unittest.TestCase):
+    def test_default_db_path_honors_user_environment_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configured = Path(tmpdir) / "wsa" / "data" / "social.db"
+            with patch.dict("os.environ", {"WSA_DB": str(configured)}):
+                self.assertEqual(configured.resolve(), default_db_path(Path("/ignored")))
+
     def test_connect_context_manager_closes_connection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "social.db"

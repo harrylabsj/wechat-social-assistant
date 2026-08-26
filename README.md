@@ -20,6 +20,34 @@ python -m pip install --upgrade wechat-social-assistant
 wsa init
 ```
 
+不需要源码目录时，可用下面的一行命令完成独立安装、默认数据目录、SQLite 初始化、截图目录和 shell 环境配置：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/install-user.sh | bash
+```
+
+独立安装器默认把数据和截图放在用户目录，不依赖 iCloud：
+
+```text
+macOS: ~/Library/Application Support/wechat-social-assistant/data/
+其他系统: ~/.local/share/wechat-social-assistant/data/
+```
+
+安装器会生成 `env.sh` 并加入下一次 shell 启动的环境；当前终端可执行安装器输出的 `source` 命令，然后直接运行：
+
+```bash
+wsa watch
+wsa ui --no-browser
+```
+
+如需在 macOS 上选择 iCloud 截图目录，显式使用：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/install-user.sh | bash -s -- --icloud
+```
+
+也可以通过 `WSA_CAPTURES_DIR=/path/to/captures` 指定任意本地或挂载盘目录。独立安装器会设置 `WSA_DB`、`WSA_CAPTURES_DIR`、`WSA_HOME` 和 `WSA_ALLOWED_ROOT`，不需要手工拼接 `--db` 参数。
+
 如果需要完整源码、Hermes Skill 或 OpenClaw 插件，请使用仓库安装器：
 
 ```bash
