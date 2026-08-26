@@ -2,6 +2,13 @@
 
 All notable changes to WeChat Social Assistant are documented here.
 
+## 1.4.1 - 2026-08-26
+
+- Removed machine-specific path sentinels from the public test suite and
+  republished the package with privacy-safe source distribution contents.
+- Added explicit Apache-2.0 package metadata, security guidance, and release
+  hygiene documentation.
+
 ## 1.4.0 - 2026-08-24
 
 - Added the contact-centric local CRM dashboard with conversation timelines,

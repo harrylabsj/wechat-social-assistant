@@ -8,8 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_DIR = ROOT / "agent"
 HERMES_SKILL_DIR = AGENT_DIR / "hermes" / "wechat-social-assistant"
-PRIVATE_HOME = "/Users/" + "jianghaidong"
-PRIVATE_VAULT = "openclaw" + "haidong"
+# Generic sentinels used to ensure adapters do not bake in a developer's
+# machine-specific paths or private vault names.
+PRIVATE_HOME = "/Users/private-user"
+PRIVATE_VAULT = "example-private-vault"
 
 
 class AgentPackageTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 [project]
 name = "wechat-social-assistant"
-version = "1.4.0"
+version = "1.4.1"
 description = "Local-first WeChat relationship memory assistant."
 readme = "README.md"
 license = "Apache-2.0"

@@ -17,8 +17,8 @@ class ReleaseHygieneTests(unittest.TestCase):
         readme = (root / "README.md").read_text(encoding="utf-8")
         gitignore = (root / ".gitignore").read_text(encoding="utf-8")
 
-        self.assertNotIn("/Users/jianghaidong", readme)
-        self.assertNotIn("openclawhaidong", readme)
+        self.assertNotIn("/Users/private-user", readme)
+        self.assertNotIn("example-private-vault", readme)
         project_text = "\n".join(
             path.read_text(encoding="utf-8")
             for folder in ("README.md", "docs", "tests", "wsa")
