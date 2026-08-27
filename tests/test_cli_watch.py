@@ -1,16 +1,76 @@
 import contextlib
 import io
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from wsa.cli import WatchLogState, _append_watch_log, _should_emit_watch_log, _watch_log_line, build_parser, cmd_watch, main
+from wsa.cli import (
+    WatchLogState,
+    _append_watch_log,
+    _contact_hint_from_observations,
+    _should_emit_watch_log,
+    _watch_log_line,
+    build_parser,
+    cmd_watch,
+    main,
+)
+from wsa.observations import OCRObservation
+from wsa.ocr import OCRText
 from wsa.settings import save_watch_interval
 
 
 class WatchLogTests(unittest.TestCase):
+    def test_window_ocr_prefers_right_panel_chat_title_over_chat_list_rows(self):
+        observations = (
+            OCRObservation(text="Q 搜索", bbox_x=0.05, bbox_y=0.96, bbox_width=0.03, bbox_height=0.02),
+            OCRObservation(text="姚歌』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
+            OCRObservation(text="好的，周六见", bbox_x=0.25, bbox_y=0.88, bbox_width=0.12, bbox_height=0.02),
+        )
+
+        self.assertEqual("姚歌", _contact_hint_from_observations(observations))
+
+    def test_watch_uses_observed_chat_title_when_contact_is_not_given(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "data" / "social.db"
+            log_file = root / "data" / "watch.log"
+            image_path = root / "data" / "captures" / "private-chat.png"
+            args = build_parser().parse_args(
+                ["--db", str(db_path), "watch", "--interval", "5", "--log-file", str(log_file)]
+            )
+            ocr_result = OCRText(
+                "Q 搜索\n姚歌』\n好的，周六见",
+                (
+                    OCRObservation(text="Q 搜索", bbox_x=0.05, bbox_y=0.96, bbox_width=0.03, bbox_height=0.02),
+                    OCRObservation(text="姚歌』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
+                    OCRObservation(text="好的，周六见", bbox_x=0.25, bbox_y=0.88, bbox_width=0.12, bbox_height=0.02),
+                ),
+            )
+
+            def fake_capture(path, *_args, **_kwargs):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"watch screenshot")
+
+            with (
+                patch("wsa.cli.frontmost_app_status", return_value=SimpleNamespace(name="微信", method="swift", detail="ok")),
+                patch("wsa.cli.next_capture_path", return_value=image_path),
+                patch("wsa.cli.capture_screenshot", side_effect=fake_capture),
+                patch("wsa.cli.ocr_image", return_value=ocr_result),
+                patch("wsa.cli.time.sleep", side_effect=KeyboardInterrupt),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                cmd_watch(args)
+
+            with sqlite3.connect(db_path) as conn:
+                names = [row[0] for row in conn.execute("select name from people")]
+
+        self.assertEqual(["姚歌"], names)
+
     def test_watch_parser_defaults_log_file_next_to_database(self):
         parser = build_parser()
         args = parser.parse_args(

@@ -7,7 +7,7 @@ set -euo pipefail
 # capture directory on macOS.
 
 WSA_PYTHON_BIN="${WSA_PYTHON_BIN:-python3}"
-WSA_PACKAGE="${WSA_PACKAGE:-wechat-social-assistant>=1.4.2}"
+WSA_PACKAGE="${WSA_PACKAGE:-wechat-social-assistant>=1.4.4}"
 NO_SHELL_RC=0
 USE_ICLOUD="${WSA_USE_ICLOUD:-0}"
 

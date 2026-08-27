@@ -48,6 +48,7 @@ from .ocr import (
     ocr_image,
 )
 from .obsidian_memory import import_obsidian_enrichments
+from .parser import TIME_RE, is_noise_line
 from .profiles import build_profiles, extract_speakers, render_profiles_markdown, signal_label
 from .privacy import (
     DEFAULT_PASSPHRASE_ENV,
@@ -672,6 +673,7 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
     captures_dir = resolve_captures_dir(args.db, getattr(args, "captures_dir", None))
     use_accessibility = args.mode == "accessibility"
+    contact_hint = _clean_window_title(getattr(args, "contact", None))
     image_path = None if use_accessibility else next_capture_path(root, captures_dir=captures_dir)
     capture_frames = 1
     capture_stability = 1.0
@@ -691,6 +693,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                     raise CaptureError("Accessibility text tree is unstable across frames")
                 text = text_capture.text
                 observations = text_capture.observations
+                if not contact_hint:
+                    contact_hint = _clean_window_title(getattr(text_capture, "window_title", None))
                 source = args.source if args.source != "ocr" else "accessibility"
                 capture_frames = max(1, int(getattr(text_capture, "frame_count", stable_frames)))
                 capture_stability = max(0.0, min(1.0, float(getattr(text_capture, "stability", 1.0))))
@@ -716,6 +720,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
                 ocr_result = ocr_image(image_path)
                 text = str(ocr_result)
                 observations = getattr(ocr_result, "observations", None)
+                if not contact_hint:
+                    contact_hint = _contact_hint_from_observations(observations)
                 source = args.source if args.source not in {"ocr", "accessibility"} else "ocr-fallback"
                 capture_detail = "connector=accessibility->ocr-fallback"
                 capture_frames = 1
@@ -735,6 +741,8 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             ocr_result = ocr_image(image_path)
             text = str(ocr_result)
             observations = getattr(ocr_result, "observations", None)
+            if not contact_hint:
+                contact_hint = _contact_hint_from_observations(observations)
             source = args.source
             capture_detail = f"image={image_path}"
             perception_connector = "macos-window-capture" if args.mode == "window" else "macos-screen-capture"
@@ -752,7 +760,7 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
         result = ingest_capture(
             args.db,
             raw_text=text,
-            contact_hint=args.contact,
+            contact_hint=contact_hint,
             source=source,
             captured_at=now_iso(),
             image_path=str(image_path) if image_path else None,
@@ -2727,6 +2735,44 @@ def _watch_interval(args: argparse.Namespace) -> int:
     if args.interval is not None:
         return args.interval
     return load_settings(args.db).watch_interval_seconds
+
+
+_GENERIC_CHAT_LIST_HINTS = {"微信会话列表", "聊天列表", "会话列表"}
+
+
+def _clean_window_title(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    text = re.sub(r"^[\s『「《〈【\[]+|[\s』」》〉】\]]+$", "", text).strip()
+    if not text or text in _GENERIC_CHAT_LIST_HINTS or is_noise_line(text) or TIME_RE.match(text):
+        return None
+    return text if len(text) <= 60 else None
+
+
+def _contact_hint_from_observations(observations) -> str | None:
+    """Infer the selected chat title from Vision's right-panel header.
+
+    A full WeChat window includes the left conversation list, so line-only OCR
+    heuristics can mistake that list for the active chat. Vision observations
+    retain normalized bounds; the selected title is in the top band of the
+    right panel (x≈0.2..0.75, y>0.92), which lets us recover a direct contact
+    without treating every left-column row as a person.
+    """
+
+    candidates: list[tuple[float, str]] = []
+    for observation in observations or ():
+        bbox = getattr(observation, "bbox", None)
+        if bbox is None:
+            continue
+        x, y, _width, _height = bbox
+        if x < 0.16 or x > 0.75 or y < 0.92:
+            continue
+        title = _clean_window_title(getattr(observation, "text", None))
+        if title:
+            candidates.append((float(y), title))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
 
 
 def _log_watch(

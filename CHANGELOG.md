@@ -2,6 +2,13 @@
 
 All notable changes to WeChat Social Assistant are documented here.
 
+## 1.4.4 - 2026-08-27
+
+- Fixed contact attribution for full WeChat window screenshots: Vision OCR
+  now uses the right-panel title bounds to recover the selected private chat
+  even when the left session list contains many timestamps and unread badges.
+- Added regression coverage for the “姚歌” private-chat capture shape.
+
 ## 1.4.3 - 2026-08-27
 
 - Added a CRM dashboard notice when captures contain only the WeChat session
