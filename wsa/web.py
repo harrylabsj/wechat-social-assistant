@@ -637,7 +637,8 @@ def build_crm_view(
         "db": {"path": str(db), "exists": db.is_file()},
         "captures_dir": str(capture_root),
         "watch": _watch_payload(db),
-        "stats": {"contacts": 0, "interactions": 0, "active_7d": 0, "followups": 0},
+        "stats": {"contacts": 0, "interactions": 0, "active_7d": 0, "followups": 0, "captures": 0},
+        "notices": [],
         "contacts": [],
     }
     if not db.is_file():
@@ -651,6 +652,8 @@ def build_crm_view(
             enrichment_map = _crm_enrichment_map(conn)
     except (OSError, sqlite3.DatabaseError, ValueError):
         return payload
+
+    payload["stats"]["captures"] = len(capture_rows)
 
     # Suggestions are useful CRM context, but a malformed OCR record must not
     # make the dashboard unavailable.  The evidence timeline remains useful
@@ -788,12 +791,24 @@ def build_crm_view(
         reverse=True,
     )
     contacts = contacts[:bounded_limit]
+    if not contacts and capture_rows:
+        payload["notices"].append(
+            {
+                "kind": "capture_context",
+                "message": (
+                    f"已采集 {len(capture_rows)} 张截图，但当前记录来自微信会话列表或其他界面，"
+                    "没有可用于联系人 CRM 的聊天内容。请在微信中打开具体联系人聊天窗口，"
+                    "保持微信在最前台后再运行 watch。"
+                ),
+            }
+        )
     payload["contacts"] = contacts
     payload["stats"] = {
         "contacts": len(contacts),
         "interactions": sum(int(item["interaction_count"]) for item in contacts),
         "active_7d": sum(1 for item in contacts if (_crm_parse_age(item["last_interaction_at"], now=now) or 9999) <= 7),
         "followups": sum(1 for item in contacts if int(item["next_action"].get("score", 0)) >= 45),
+        "captures": len(capture_rows),
     }
     return payload
 
@@ -1358,6 +1373,7 @@ INDEX_HTML = r"""<!doctype html>
     .meta-row { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
     .next-action { border-left:3px solid var(--blue); background:rgba(123,182,255,.08); padding:10px 12px; border-radius:8px; margin-top:14px; }
     .next-action .draft { color:var(--muted); font-size:12px; margin-top:6px; white-space:pre-wrap; }
+    .notice { border-left:3px solid var(--warn); background:rgba(243,189,100,.1); color:#ead6ac; padding:10px 12px; border-radius:8px; margin-bottom:14px; }
     .timeline { display:grid; gap:10px; margin-top:14px; }
     .event { border-left:3px solid var(--accent); background:rgba(255,255,255,.035); border-radius:8px; padding:10px 12px; }
     .event-meta { display:flex; flex-wrap:wrap; gap:7px; align-items:center; color:var(--muted); font-size:12px; }
@@ -1398,6 +1414,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="card"><div class="label">近 7 天活跃</div><div id="statActive" class="value good">—</div></div>
     <div class="card"><div class="label">建议跟进</div><div id="statFollowups" class="value warn">—</div></div>
   </section>
+  <div id="crmNotice" class="notice" style="display:none"></div>
   <section class="grid layout">
     <section class="panel">
       <div class="list-head"><h2>联系人</h2><input id="contactSearch" type="search" placeholder="搜索姓名 / 内容…" /></div>
@@ -1428,6 +1445,13 @@ function renderStats() {
   $('statInteractions').textContent=esc(stats.interactions ?? 0);
   $('statActive').textContent=esc(stats.active_7d ?? 0);
   $('statFollowups').textContent=esc(stats.followups ?? 0);
+}
+function renderNotice() {
+  const box=$('crmNotice'); box.replaceChildren();
+  const notices=(crmData&&crmData.notices)||[];
+  if(!notices.length){ box.style.display='none'; return; }
+  box.style.display='block';
+  notices.forEach((notice)=>{ const line=document.createElement('div'); line.textContent=notice.message||''; box.appendChild(line); });
 }
 function renderList() {
   const list=$('contactList'); list.replaceChildren();
@@ -1529,7 +1553,7 @@ async function refresh() {
     if(!response.ok) throw new Error('面板接口不可用');
     crmData=await response.json();
     renderOutreach(outreachResponse.ok ? (await outreachResponse.json()).drafts||[] : []);
-    renderStats();
+    renderStats(); renderNotice();
     const running=Boolean((crmData.watch||{}).running);
     $('watchStatus').replaceChildren();
     $('watchStatus').appendChild(Object.assign(document.createElement('span'),{className:`status-dot ${running?'on':''}`}));

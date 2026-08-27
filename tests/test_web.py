@@ -129,6 +129,23 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual("2026-08-20T09:00:00+08:00", event["captured_at"])
         self.assertIn("下周三线下分享见", event["summary"])
 
+    def test_crm_view_explains_when_only_session_list_was_captured(self):
+        from wsa.web import build_crm_view
+
+        ingest_capture(
+            self.db,
+            raw_text="微信会话列表\n项目群 有 3 条新消息\n服务通知",
+            contact_hint="微信会话列表",
+            source="watch",
+            captured_at="2026-08-24T09:00:00+08:00",
+        )
+        view = build_crm_view(self.db, captures_dir=self.captures)
+
+        self.assertEqual([], view["contacts"])
+        self.assertEqual(1, view["stats"]["captures"])
+        self.assertTrue(view["notices"])
+        self.assertIn("打开具体联系人聊天窗口", view["notices"][0]["message"])
+
     def test_contact_meta_save_merges_and_roundtrips_to_crm_view(self):
         from wsa.enrichment import record_contact_enrichment
         from wsa.web import build_crm_view, save_contact_meta

@@ -2,6 +2,14 @@
 
 All notable changes to WeChat Social Assistant are documented here.
 
+## 1.4.3 - 2026-08-27
+
+- Added a CRM dashboard notice when captures contain only the WeChat session
+  list or other non-conversation UI, explaining how to collect contact
+  timelines from a specific chat window.
+- Exposed capture count in the CRM summary so successful screenshots are
+  visible even when no contact record can be derived.
+
 ## 1.4.2 - 2026-08-26
 
 - Added a standalone one-line installer for PyPI users without a source
