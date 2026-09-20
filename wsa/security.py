@@ -30,12 +30,20 @@ def mcp_allowed_root(*, base: Path | str | None = None) -> Path:
     return mcp_allowed_roots(base=base)[0]
 
 
-def mcp_allowed_roots(*, base: Path | str | None = None) -> tuple[Path, ...]:
-    """Return configured roots plus the selected database's managed capture root.
+MEDIA_LABELS = frozenset({"captures_dir", "image_path", "media_path"})
+
+
+def mcp_allowed_roots(
+    *,
+    base: Path | str | None = None,
+    include_capture_root: bool = True,
+) -> tuple[Path, ...]:
+    """Return the configured roots, plus the capture root for media paths only.
 
     WSA may intentionally keep screenshots in an iCloud directory outside the
-    checkout.  That configured capture root is trusted for capture/media paths
-    while arbitrary paths outside ``WSA_ALLOWED_ROOT`` remain rejected.
+    checkout, so capture/media arguments may resolve there.  Everything else
+    (databases, exports, backups) stays inside ``WSA_ALLOWED_ROOT``: a capture
+    directory is not a general-purpose write target.
     """
 
     configured = os.environ.get("WSA_ALLOWED_ROOT")
@@ -43,7 +51,7 @@ def mcp_allowed_roots(*, base: Path | str | None = None) -> tuple[Path, ...]:
         roots = [Path(item).expanduser() for item in configured.split(os.pathsep) if item]
     else:
         roots = [Path(base or Path.cwd())]
-    if base is not None:
+    if base is not None and include_capture_root:
         base_path = Path(base).expanduser()
         db_candidate = base_path if base_path.name == "social.db" else base_path / "social.db"
         roots.append(resolve_captures_dir(db_candidate))
@@ -69,7 +77,7 @@ def resolve_mcp_path(
     if not mcp_path_policy_enabled():
         return resolved
 
-    roots = mcp_allowed_roots(base=base)
+    roots = mcp_allowed_roots(base=base, include_capture_root=label in MEDIA_LABELS)
     if not any(_is_relative_to(resolved, root) for root in roots):
         joined = ", ".join(str(root) for root in roots)
         raise PathPolicyError(f"{label} must stay under a configured trusted root ({joined})")
@@ -85,9 +93,24 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 
 
 def configure_mcp_path_policy(*, root: Path | str | None = None) -> Path:
-    """Enable the default stdio policy for a standalone MCP process."""
+    """Enable the default stdio policy for a standalone MCP process.
 
-    allowed = Path(root or os.environ.get("WSA_ALLOWED_ROOT") or Path.cwd()).expanduser().resolve(strict=False)
-    os.environ.setdefault("WSA_ALLOWED_ROOT", str(allowed))
-    os.environ.setdefault("WSA_MCP_ENFORCE_PATHS", "1")
+    Without an explicit root the policy falls back to the selected database's
+    directory rather than the working directory: launching ``wsa-mcp`` from
+    ``~`` would otherwise make the entire home directory a trusted root for
+    every path argument.
+    """
+
+    from .store import default_db_path
+
+    configured = root or os.environ.get("WSA_ALLOWED_ROOT")
+    if configured:
+        allowed = Path(configured).expanduser().resolve(strict=False)
+    else:
+        allowed = Path(default_db_path(Path.cwd())).expanduser().resolve(strict=False).parent
+    os.environ["WSA_ALLOWED_ROOT"] = str(allowed)
+    # Force-set, not setdefault: a stale WSA_MCP_ENFORCE_PATHS=0 inherited
+    # from the environment would otherwise keep the whole boundary disabled
+    # while this function reports that it enabled it.
+    os.environ["WSA_MCP_ENFORCE_PATHS"] = "1"
     return allowed

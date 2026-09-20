@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import contextlib
 import io
 import sqlite3
@@ -26,11 +28,11 @@ class WatchLogTests(unittest.TestCase):
     def test_window_ocr_prefers_right_panel_chat_title_over_chat_list_rows(self):
         observations = (
             OCRObservation(text="Q 搜索", bbox_x=0.05, bbox_y=0.96, bbox_width=0.03, bbox_height=0.02),
-            OCRObservation(text="姚歌』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
+            OCRObservation(text="李四』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
             OCRObservation(text="好的，周六见", bbox_x=0.25, bbox_y=0.88, bbox_width=0.12, bbox_height=0.02),
         )
 
-        self.assertEqual("姚歌", _contact_hint_from_observations(observations))
+        self.assertEqual("李四", _contact_hint_from_observations(observations))
 
     def test_watch_uses_observed_chat_title_when_contact_is_not_given(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -42,10 +44,10 @@ class WatchLogTests(unittest.TestCase):
                 ["--db", str(db_path), "watch", "--interval", "5", "--log-file", str(log_file)]
             )
             ocr_result = OCRText(
-                "Q 搜索\n姚歌』\n好的，周六见",
+                "Q 搜索\n李四』\n好的，周六见",
                 (
                     OCRObservation(text="Q 搜索", bbox_x=0.05, bbox_y=0.96, bbox_width=0.03, bbox_height=0.02),
-                    OCRObservation(text="姚歌』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
+                    OCRObservation(text="李四』", bbox_x=0.21, bbox_y=0.96, bbox_width=0.04, bbox_height=0.02),
                     OCRObservation(text="好的，周六见", bbox_x=0.25, bbox_y=0.88, bbox_width=0.12, bbox_height=0.02),
                 ),
             )
@@ -69,7 +71,7 @@ class WatchLogTests(unittest.TestCase):
             with sqlite3.connect(db_path) as conn:
                 names = [row[0] for row in conn.execute("select name from people")]
 
-        self.assertEqual(["姚歌"], names)
+        self.assertEqual(["李四"], names)
 
     def test_watch_parser_defaults_log_file_next_to_database(self):
         parser = build_parser()

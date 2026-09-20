@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import subprocess
 import sys
 import tempfile
@@ -109,6 +111,21 @@ class MCPServerContractTests(unittest.TestCase):
         self.assertEqual(mcp_server.MCP_PROMPTS, prompts["result"]["prompts"])
         self.assertEqual(mcp_server.MCP_RESOURCES, resources["result"]["resources"])
         self.assertEqual(-32601, missing["error"]["code"])
+
+    def test_non_object_request_lines_get_a_protocol_error_not_a_crash(self):
+        """A host sending `[1]`, `"x"` or `null` must not kill the server."""
+
+        for bad in ([1, 2], "hello", 42, None):
+            with self.subTest(bad=bad):
+                response = mcp_server.handle_jsonrpc(bad)
+                self.assertIsNotNone(response)
+                self.assertEqual(-32600, response["error"]["code"])
+
+    def test_limit_clamps_the_default_and_explicit_values_alike(self):
+        self.assertEqual(200, mcp_server._limit(None, default=200))
+        self.assertEqual(1000, mcp_server._limit(5000, default=200))
+        self.assertEqual(1, mcp_server._limit(0, default=200))
+        self.assertEqual(42, mcp_server._limit(42, default=200))
 
     def test_read_only_tool_calls_return_structured_relationship_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:

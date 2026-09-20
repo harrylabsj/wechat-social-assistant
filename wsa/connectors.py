@@ -16,11 +16,13 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import tempfile
 from collections import Counter
 from typing import Protocol, Sequence
 
 from .observations import OCRObservation, observation_from_mapping
 from .perception import annotate_accessibility_speakers
+from .settings import secure_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -174,7 +176,7 @@ class MacOSScreenCaptureKitConnector:
             raise RuntimeError(f"ScreenCaptureKit unavailable: {exc}") from exc
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "ScreenCaptureKit capture failed")
-        path = Path(request.output_path)
+        path = secure_file(Path(request.output_path))
         if not path.exists() or path.stat().st_size == 0:
             raise RuntimeError("ScreenCaptureKit returned no image")
         from .ocr import resolve_crop_region, crop_image
@@ -282,16 +284,7 @@ def ensure_accessibility_probe() -> Path:
     if not ACCESSIBILITY_SOURCE.exists():
         raise RuntimeError(f"Accessibility probe source missing: {ACCESSIBILITY_SOURCE}")
     if _needs_build(ACCESSIBILITY_SOURCE, ACCESSIBILITY_BINARY):
-        ACCESSIBILITY_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", str(ACCESSIBILITY_SOURCE), "-o", str(ACCESSIBILITY_BINARY)],
-            text=True,
-            capture_output=True,
-            timeout=30,
-            env=_swift_compile_env(),
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "swiftc failed")
+        _compile_swift(ACCESSIBILITY_SOURCE, ACCESSIBILITY_BINARY)
     return ACCESSIBILITY_BINARY
 
 
@@ -301,16 +294,7 @@ def ensure_accessibility_reader() -> Path:
     if not ACCESSIBILITY_READER_SOURCE.exists():
         raise RuntimeError(f"Accessibility text reader source missing: {ACCESSIBILITY_READER_SOURCE}")
     if _needs_build(ACCESSIBILITY_READER_SOURCE, ACCESSIBILITY_READER_BINARY):
-        ACCESSIBILITY_READER_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", str(ACCESSIBILITY_READER_SOURCE), "-o", str(ACCESSIBILITY_READER_BINARY)],
-            text=True,
-            capture_output=True,
-            timeout=30,
-            env=_swift_compile_env(),
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "swiftc failed")
+        _compile_swift(ACCESSIBILITY_READER_SOURCE, ACCESSIBILITY_READER_BINARY)
     return ACCESSIBILITY_READER_BINARY
 
 
@@ -320,16 +304,12 @@ def ensure_screen_capture_kit() -> Path:
     if not SCREEN_CAPTURE_KIT_SOURCE.exists():
         raise RuntimeError(f"ScreenCaptureKit source missing: {SCREEN_CAPTURE_KIT_SOURCE}")
     if _needs_build(SCREEN_CAPTURE_KIT_SOURCE, SCREEN_CAPTURE_KIT_BINARY):
-        SCREEN_CAPTURE_KIT_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", "-parse-as-library", str(SCREEN_CAPTURE_KIT_SOURCE), "-o", str(SCREEN_CAPTURE_KIT_BINARY)],
-            text=True,
-            capture_output=True,
+        _compile_swift(
+            SCREEN_CAPTURE_KIT_SOURCE,
+            SCREEN_CAPTURE_KIT_BINARY,
+            extra_args=["-parse-as-library"],
             timeout=45,
-            env=_swift_compile_env(),
         )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "swiftc failed")
     return SCREEN_CAPTURE_KIT_BINARY
 
 
@@ -515,6 +495,44 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
+def _compile_swift(
+    source: Path,
+    binary: Path,
+    *,
+    extra_args: list[str] | None = None,
+    timeout: int = 30,
+) -> Path:
+    """Compile a Swift helper into place atomically.
+
+    swiftc writes its output in one shot, so a concurrent build or a compile
+    killed mid-run must never leave a half-written binary at the real path --
+    ``_needs_build`` trusts mtimes and would keep using the broken helper.
+    Compile to a temp name beside the target and rename; two racing builds
+    each produce a complete binary and the last rename wins.
+    """
+
+    _require_swiftc()
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{binary.name}.", suffix=".tmp", dir=binary.parent)
+    os.close(fd)
+    temp_binary = Path(temp_name)
+    try:
+        result = subprocess.run(
+            ["swiftc", *(extra_args or []), str(source), "-o", str(temp_binary)],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            env=_swift_compile_env(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "swiftc failed")
+        os.replace(temp_binary, binary)
+    except BaseException:
+        temp_binary.unlink(missing_ok=True)
+        raise
+    return binary
+
+
 def _swift_compile_env() -> dict[str, str]:
     """Keep Swift's module cache inside the connector cache directory.
 
@@ -525,6 +543,18 @@ def _swift_compile_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("CLANG_MODULE_CACHE_PATH", str(BINARY_ROOT / "clang-module-cache"))
     return env
+
+
+def _require_swiftc() -> str:
+    """Turn a missing toolchain into an actionable message, not a traceback."""
+
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        raise RuntimeError(
+            "需要 Xcode Command Line Tools 才能编译 macOS 采集组件："
+            "请运行 xcode-select --install 后重试。"
+        )
+    return swiftc
 
 
 def _needs_build(source: Path, binary: Path) -> bool:

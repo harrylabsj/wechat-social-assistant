@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import ast
 import unittest
 from collections import Counter

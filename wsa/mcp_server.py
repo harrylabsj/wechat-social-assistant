@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import date
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -13,6 +14,7 @@ from .audit import audit_report_to_dict, build_audit_report, render_audit_report
 from .benchmark import benchmark_report_to_dict, run_perception_benchmark
 from .cli import (
     _capture_once,
+    _normalize_contact_match_text as _normalize_match_text,
     _best_hidden_suggestion,
     _brief_display_evidence,
     _brief_no_suggestion_message,
@@ -32,6 +34,7 @@ from .candidates import (
     render_candidates_markdown,
 )
 from .connectors import connector_statuses
+from .ocr import CaptureError
 from .dashboard import (
     build_relationship_dashboard,
     dashboard_to_dict,
@@ -93,7 +96,13 @@ from .sources import (
     source_to_dict,
 )
 from .status import StatusReport, build_status_report, render_status_report
-from .store import connect, default_db_path, init_db, list_ocr_observations
+from .store import (
+    EmptyCaptureError,
+    connect,
+    default_db_path,
+    init_db,
+    list_ocr_observations,
+)
 from .suggestions import Suggestion, build_suggestions, followup_strength_label
 from .web import build_crm_view, save_contact_meta
 
@@ -743,10 +752,18 @@ MCP_PROMPTS = [
 ]
 
 
-def handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
+def handle_jsonrpc(message: Any) -> dict[str, Any] | None:
+    # A host may send valid JSON that is not an object (a bare number, a
+    # list, a string).  Answering with a protocol error keeps the stdio loop
+    # alive; letting the attribute access raise would end the server and the
+    # host would only see EOF.
+    if not isinstance(message, dict):
+        return _error(None, -32600, "Invalid Request: expected a JSON object")
     request_id = message.get("id")
     method = message.get("method")
     params = message.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
     if request_id is None and method and method.startswith("notifications/"):
         return None
     if not isinstance(method, str):
@@ -794,7 +811,6 @@ def serve_stdio(infile=sys.stdin, outfile=sys.stdout) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_mcp_path_policy()
     parser = argparse.ArgumentParser(description="Run WeChat Social Assistant as a local-first MCP server.")
     parser.add_argument(
         "--transport",
@@ -802,8 +818,24 @@ def main(argv: list[str] | None = None) -> int:
         default="stdio",
         help="MCP transport to use. Only stdio is supported.",
     )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Database file. Defaults to WSA_DB, then <cwd>/data/social.db. The launcher should pass "
+        "this explicitly: a host may start the server from a different working directory, and the "
+        "cwd fallback would otherwise point captures at a fresh, empty database.",
+    )
     parser.add_argument("--version", action="version", version=f"wechat-social-assistant-mcp {SERVER_VERSION}")
-    parser.parse_args(argv)
+    parsed = parser.parse_args(argv)
+    if parsed.db is not None:
+        # Pin the process-wide default before anything resolves a database,
+        # so every tool call agrees on the same one.
+        os.environ["WSA_DB"] = str(Path(parsed.db).expanduser().resolve(strict=False))
+    configure_mcp_path_policy()
+    # Announce the effective target on stderr: stdout is the JSON-RPC channel,
+    # and a wrong database must be visible in the launcher log, not silent.
+    sys.stderr.write(f"wsa-mcp: db={default_db_path()}\n")
     serve_stdio()
     return 0
 
@@ -869,7 +901,17 @@ def _handle_tool_call(params: dict[str, Any]) -> dict[str, Any]:
     handler = handlers.get(name)
     if handler is None:
         raise ValueError(f"unknown tool: {name}")
-    return handler(arguments)
+    try:
+        return handler(arguments)
+    except (CaptureError, EmptyCaptureError) as exc:
+        # An expected capture failure is the tool's answer, not a protocol
+        # error: report it as a tool error so the host sees the reason
+        # instead of a misleading Invalid params / Internal error code.
+        return {
+            "content": [{"type": "text", "text": str(exc)}],
+            "structuredContent": {"error": str(exc), "kind": type(exc).__name__},
+            "isError": True,
+        }
 
 
 def _handle_resource_read(params: dict[str, Any]) -> dict[str, Any]:
@@ -974,7 +1016,13 @@ def _tool_get_status(arguments: dict[str, Any]) -> dict[str, Any]:
     report = build_status_report(
         db_path,
         log_file=_optional_path(arguments.get("log_file"), base=db_path.parent),
-        captures_dir=_optional_path(arguments.get("captures_dir"), base=db_path.parent),
+        # The capture directory usually lives in iCloud outside the trusted
+        # root, so it resolves under the media policy like capture arguments
+        # do -- otherwise get_status rejects the very directory capture
+        # writes to.
+        captures_dir=_optional_path(
+            arguments.get("captures_dir"), base=db_path.parent, label="captures_dir"
+        ),
     )
     return _tool_result(render_status_report(report), _status_to_dict(report))
 
@@ -2039,11 +2087,16 @@ def _db_path(arguments: dict[str, Any]) -> Path:
     )
 
 
-def _optional_path(value: Any, *, base: Path | str | None = None) -> Path | None:
+def _optional_path(
+    value: Any,
+    *,
+    base: Path | str | None = None,
+    label: str = "path",
+) -> Path | None:
     if value is None or value == "":
         return None
     default = Path(str(value)).expanduser()
-    return resolve_mcp_path(default, default=default, label="path", base=base)
+    return resolve_mcp_path(default, default=default, label=label, base=base)
 
 
 def _optional_str(value: Any) -> str | None:
@@ -2054,9 +2107,10 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _limit(value: Any, *, default: int) -> int:
-    if value is None or value == "":
-        return default
-    return max(1, min(100, int(value)))
+    # The default and the explicit value go through the same clamp, so
+    # omitting a limit can never return more than an explicit maximum.
+    limit = default if value is None or value == "" else int(value)
+    return max(1, min(1000, limit))
 
 
 def _optional_int(value: Any) -> int | None:
@@ -2090,10 +2144,6 @@ def _prioritize_exact_cards(cards, query: str | None):
             card.name,
         ),
     )
-
-
-def _normalize_match_text(value: str) -> str:
-    return "".join(character for character in value.lower() if character.isalnum())
 
 
 def _query_arguments(query: str) -> dict[str, str]:

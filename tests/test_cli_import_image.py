@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import contextlib
 import io
 import sqlite3
@@ -218,7 +220,7 @@ class ImportImageCommandTests(unittest.TestCase):
                 )
 
             output = stdout.getvalue()
-            self.assertEqual(0, exit_code)
+            self.assertEqual(2, exit_code)
             mocked_ocr.assert_not_called()
             self.assertIn("没有找到可导入的图片", output)
             self.assertIn(str(import_dir), output)
@@ -247,7 +249,7 @@ class ImportImageCommandTests(unittest.TestCase):
                 )
 
             output = stdout.getvalue()
-            self.assertEqual(0, exit_code)
+            self.assertEqual(2, exit_code)
             mocked_ocr.assert_not_called()
             self.assertIn("找不到图片或目录", output)
             self.assertIn(str(missing_image), output)
@@ -276,7 +278,7 @@ class ImportImageCommandTests(unittest.TestCase):
                 )
 
             output = stdout.getvalue()
-            self.assertEqual(0, exit_code)
+            self.assertEqual(2, exit_code)
             mocked_ocr.assert_not_called()
             self.assertIn("不支持的图片类型", output)
             self.assertIn(str(text_file), output)

@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import unittest
 
 from wsa.parser import extract_signals, is_noise_line, normalize_lines, parse_capture

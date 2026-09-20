@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import sqlite3
 import tempfile
 import unittest
@@ -471,6 +473,45 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(1, people_count)
         self.assertEqual(1, capture_count)
         self.assertTrue(image_exists)
+
+
+
+
+class OrphanCaptureImagesTests(unittest.TestCase):
+    """Purge-orphans must only ever see WSA-named, unreferenced files."""
+
+    def test_only_unreferenced_wechat_named_files_in_managed_roots(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "social.db"
+            captures = root / "captures"
+            captures.mkdir(parents=True)
+            init_db(db_path)
+
+            live = captures / "wechat-20260526-090000-000000.png"
+            live.write_bytes(b"png")
+            orphan = captures / "wechat-20260527-090000-000000.png"
+            orphan.write_bytes(b"png")
+            imported = captures / "user-import.png"
+            imported.write_bytes(b"png")
+            other = captures / "notes.txt"
+            other.write_text("not an image", encoding="utf-8")
+
+            ingest_capture(
+                db_path,
+                raw_text="张三\n下周见",
+                contact_hint="张三",
+                source="test",
+                image_path=str(live),
+                image_managed=True,
+            )
+
+            from wsa.store import orphan_capture_images
+
+            with connect(db_path) as conn:
+                orphans = orphan_capture_images(conn, managed_roots=(captures,))
+
+            self.assertEqual([orphan.resolve(strict=False)], orphans)
 
 
 if __name__ == "__main__":

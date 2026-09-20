@@ -47,8 +47,16 @@ def build_suggestions(
     as_of: str | None = None,
     limit: int = 20,
     min_score: int = 0,
+    profiles: list | None = None,
 ) -> list[Suggestion]:
-    now = _parse_dt(as_of) if as_of else datetime.now().astimezone()
+    """Build follow-up suggestions.
+
+    ``profiles`` lets a caller that already ran ``build_profiles`` reuse it.
+    Rebuilding profiles is a full capture scan plus the whole signal regex
+    pass, and the dashboard polls this every 10 seconds.
+    """
+
+    now = parse_datetime(as_of) if as_of else datetime.now().astimezone()
     chat_suggestions: list[Suggestion] = []
 
     with connect(db_path) as conn:
@@ -88,9 +96,10 @@ def build_suggestions(
                 as_of=now,
                 evidence_captured_at=_evidence_captured_at(signal_captures, signals),
             )
-            chat_suggestions.append(suggestion)
+            if suggestion is not None:
+                chat_suggestions.append(suggestion)
 
-    speaker_suggestions = _speaker_suggestions(db_path, as_of=now, min_score=0)
+    speaker_suggestions = _speaker_suggestions(db_path, as_of=now, min_score=0, profiles=profiles)
     speaker_source_chats = {
         source_chat
         for suggestion in speaker_suggestions
@@ -102,14 +111,21 @@ def build_suggestions(
         if not (is_group_chat_name(suggestion.person_name) and suggestion.person_name in speaker_source_chats)
     ]
     suggestions.extend(speaker_suggestions)
+    suggestions = _dedupe_by_person(suggestions)
     suggestions = _apply_feedback(db_path, suggestions, as_of=now)
     suggestions = [suggestion for suggestion in suggestions if suggestion.score >= min_score]
     return sorted(suggestions, key=lambda item: (-item.score, item.person_name))[:limit]
 
 
-def _speaker_suggestions(db_path: Path | str, *, as_of: datetime, min_score: int) -> list[Suggestion]:
+def _speaker_suggestions(
+    db_path: Path | str,
+    *,
+    as_of: datetime,
+    min_score: int,
+    profiles: list | None = None,
+) -> list[Suggestion]:
     suggestions: list[Suggestion] = []
-    for profile in build_profiles(db_path):
+    for profile in (build_profiles(db_path) if profiles is None else profiles):
         if profile.kind != "speaker" or not profile.source_chats or not profile.last_interaction_at:
             continue
         latest_text, signals, evidence_captured_at = _speaker_signal_context(db_path, profile)
@@ -124,9 +140,34 @@ def _speaker_suggestions(db_path: Path | str, *, as_of: datetime, min_score: int
             source_chats=profile.source_chats,
             evidence_captured_at=evidence_captured_at,
         )
-        if suggestion.score >= min_score:
+        if suggestion is not None and suggestion.score >= min_score:
             suggestions.append(suggestion)
     return suggestions
+
+
+def _dedupe_by_person(suggestions: list[Suggestion]) -> list[Suggestion]:
+    """Keep one suggestion per person name.
+
+    A person who appears both as a direct contact and as a group speaker
+    produced two rows; downstream consumers key suggestions by person name,
+    so the duplicates either collided or presented the same person twice.
+    The higher-scoring entry wins, ties going to the direct-chat one.
+    """
+
+    best: dict[str, Suggestion] = {}
+    for suggestion in suggestions:
+        key = " ".join(suggestion.person_name.split())
+        current = best.get(key)
+        if current is None:
+            best[key] = suggestion
+            continue
+        # Higher score wins; on a tie the direct-chat entry beats the
+        # group-speaker one (it has no source_chats).
+        challenger = (suggestion.score, not suggestion.source_chats)
+        incumbent = (current.score, not current.source_chats)
+        if challenger > incumbent:
+            best[key] = suggestion
+    return list(best.values())
 
 
 def _apply_feedback(
@@ -154,7 +195,7 @@ def _is_suppressed_by_feedback(
     for record in records:
         if record.action == "do_not_contact":
             return True
-        if record.action == "snooze" and record.until_at and _parse_dt(record.until_at) > as_of:
+        if record.action == "snooze" and record.until_at and parse_datetime(record.until_at) > as_of:
             return True
         if record.action in {"mark_done", "not_relevant", "wrong_person", "already_close"}:
             if _feedback_covers_current_suggestion(record, suggestion):
@@ -164,7 +205,7 @@ def _is_suppressed_by_feedback(
 
 def _feedback_covers_current_suggestion(record: FeedbackRecord, suggestion: Suggestion) -> bool:
     evidence_at = suggestion.evidence_captured_at or suggestion.last_interaction_at
-    return _parse_dt(record.created_at) >= _parse_dt(evidence_at)
+    return parse_datetime(record.created_at) >= parse_datetime(evidence_at)
 
 
 def _tune_suggestion_with_feedback(suggestion: Suggestion, records: list[FeedbackRecord]) -> Suggestion:
@@ -231,8 +272,15 @@ def _suggest_for_person(
     as_of: datetime,
     source_chats: tuple[str, ...] = (),
     evidence_captured_at: str | None = None,
-) -> Suggestion:
-    days = max(0, (as_of - _parse_dt(last_interaction_at)).days)
+) -> Suggestion | None:
+    try:
+        seen_at = parse_datetime(last_interaction_at)
+    except ValueError:
+        # One malformed stored timestamp (e.g. from an import with a broken
+        # date header) must not take down the whole suggestion pipeline for
+        # every caller; that person simply yields no suggestion this round.
+        return None
+    days = max(0, (as_of - seen_at).days)
     score = _base_score(days)
     for kind, boost in {
         "needs_reply": 150,
@@ -310,11 +358,11 @@ def _speaker_signal_context(db_path: Path | str, profile) -> tuple[str, dict[str
 def _captures_within_signal_window(captures, reference_captured_at: str | None):
     if not captures or not reference_captured_at:
         return list(captures)
-    reference = _parse_dt(reference_captured_at)
+    reference = parse_datetime(reference_captured_at)
     recent = [
         capture
         for capture in captures
-        if 0 <= (reference - _parse_dt(capture["captured_at"])).days <= SIGNAL_LOOKBACK_DAYS
+        if 0 <= (reference - parse_datetime(capture["captured_at"])).days <= SIGNAL_LOOKBACK_DAYS
     ]
     return recent or [captures[0]]
 
@@ -526,10 +574,6 @@ def _shorten_topic(candidate: str, *, max_length: int = 34) -> str:
     if len(candidate) <= max_length:
         return candidate
     return candidate[:max_length].rstrip(" ，。！？,.!?") + "..."
-
-
-def _parse_dt(value: str) -> datetime:
-    return parse_datetime(value)
 
 
 def _format_interaction_time(value: str) -> str:

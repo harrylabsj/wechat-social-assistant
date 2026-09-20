@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -33,6 +35,37 @@ class OutreachDraftTests(unittest.TestCase):
         }
         params.update(kwargs)
         return create_outreach_drafts(self.db, **params)
+
+    def test_sent_and_dismissed_drafts_are_terminal(self):
+        draft = self._create()[0]
+        approved = update_outreach_draft(
+            self.db, draft_id=draft.id, action="approve",
+            confirmed=True, confirmation_text=UPDATE_CONFIRMATION_TEXT,
+        )
+        sent = update_outreach_draft(
+            self.db, draft_id=approved.id, action="mark_sent",
+            confirmed=True, confirmation_text=UPDATE_CONFIRMATION_TEXT,
+        )
+        self.assertEqual("sent", sent.status)
+        # A sent or dismissed message must not be resurrectable by a host.
+        for action in ("approve", "mark_sent", "dismiss", "edit"):
+            with self.assertRaises(ValueError, msg=action):
+                update_outreach_draft(
+                    self.db, draft_id=sent.id, action=action, draft_text="新文本",
+                    confirmed=True, confirmation_text=UPDATE_CONFIRMATION_TEXT,
+                )
+        second = self._create(
+            items=[{"person_name": "李四", "draft_text": "Kiwi 新版上线了，想你用得上。"}]
+        )[0]
+        dismissed = update_outreach_draft(
+            self.db, draft_id=second.id, action="dismiss",
+            confirmed=True, confirmation_text=UPDATE_CONFIRMATION_TEXT,
+        )
+        with self.assertRaises(ValueError):
+            update_outreach_draft(
+                self.db, draft_id=dismissed.id, action="approve",
+                confirmed=True, confirmation_text=UPDATE_CONFIRMATION_TEXT,
+            )
 
     def test_create_requires_explicit_confirmation(self):
         with self.assertRaises(ValueError):

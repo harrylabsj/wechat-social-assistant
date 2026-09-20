@@ -53,6 +53,7 @@ from .profiles import build_profiles, extract_speakers, render_profiles_markdown
 from .privacy import (
     DEFAULT_PASSPHRASE_ENV,
     DEFAULT_RETENTION_DAYS,
+    PBKDF2_ITERATIONS,
     PrivacyPolicy,
     encrypted_backup_database,
     purge_expired_captures,
@@ -73,13 +74,22 @@ from .sources import (
     render_relationship_sources_markdown,
 )
 from .settings import (
+    capture_storage_roots,
     load_settings,
     resolve_captures_dir,
     save_captures_dir,
     save_watch_interval,
+    secure_directory,
+    secure_file,
     settings_path_for_db,
 )
-from .status import build_status_report, render_status_report, status_quality_notes, stop_watch_processes
+from .status import (
+    build_status_report,
+    render_status_report,
+    status_quality_notes,
+    stop_watch_processes,
+    watch_process_details,
+)
 from .store import (
     EmptyCaptureError,
     connect,
@@ -88,6 +98,7 @@ from .store import (
     ingest_capture,
     init_db,
     now_iso,
+    orphan_capture_images,
     refresh_capture_signals,
     refresh_derived_people,
     reset_memory,
@@ -106,6 +117,9 @@ from .wechat_archive import (
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
 DEFAULT_OBSIDIAN_VAULT = Path.home() / "Documents" / "Obsidian Vault"
+DEFAULT_WATCH_APPS = ("WeChat", "微信")
+# watch runs for days; keep the log bounded to one rotated generation.
+WATCH_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _default_reports_dir(db_path: Path) -> Path:
@@ -126,7 +140,7 @@ class WSAArgumentParser(argparse.ArgumentParser):
         if getattr(parsed, "command", None) in {"analyze", "status", "watch", "weekly-report"} and parsed.log_file is None:
             parsed.log_file = Path(parsed.db).parent / "watch.log"
         if getattr(parsed, "command", None) == "watch" and parsed.app is None:
-            parsed.app = ["WeChat", "微信"]
+            parsed.app = list(DEFAULT_WATCH_APPS)
         if getattr(parsed, "command", None) == "analyze":
             reports_dir = _default_reports_dir(Path(parsed.db))
             if parsed.profiles_out is None:
@@ -242,6 +256,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="For Accessibility mode, require this many matching frames (default: 2).",
     )
+    capture.add_argument(
+        "--keep-failed-image",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the screenshot when a one-shot capture fails, for troubleshooting "
+        "(default). Use --no-keep-failed-image to discard it. Automated capture "
+        "(watch, MCP) always discards, so it cannot accumulate unreferenced files.",
+    )
     capture.set_defaults(func=cmd_capture)
 
     quick_capture = sub.add_parser(
@@ -266,6 +288,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="For Accessibility mode, require this many matching frames (default: 2).",
+    )
+    quick_capture.add_argument(
+        "--keep-failed-image",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Same as capture: keep the screenshot when a one-shot capture fails.",
     )
     quick_capture.set_defaults(func=cmd_quick_capture)
 
@@ -493,6 +521,14 @@ def build_parser() -> argparse.ArgumentParser:
     captures_dir.add_argument("path", type=Path, nargs="?", help="New directory. Omit to show the resolved directory.")
     captures_dir.add_argument("--clear", action="store_true", help="Clear the saved override and return to automatic iCloud/local mode.")
     captures_dir.add_argument("--create", action="store_true", help="Create the resolved directory after showing/saving it.")
+    captures_dir.add_argument(
+        "--purge-orphans",
+        action="store_true",
+        help="Delete WSA-named image files inside the managed capture directories that no capture row "
+        "in this database references. Other files, user imports, and other databases' screenshots "
+        "are never touched. Add --yes to delete; without it, only list.",
+    )
+    captures_dir.add_argument("--yes", action="store_true", help="Actually delete orphans with --purge-orphans.")
     captures_dir.set_defaults(func=cmd_captures_dir)
 
     reset = sub.add_parser("reset", help="Clear local database rows and captured screenshots.")
@@ -615,6 +651,14 @@ def cmd_backup(args: argparse.Namespace) -> int:
         return 2
     encrypted = " encrypted=yes" if args.encrypt else " encrypted=no"
     print(f"backup={target} schema={version}{encrypted}")
+    if args.encrypt:
+        # The KDF parameters must match on the way back, so hand the user the
+        # exact command rather than letting them discover the mismatch later.
+        print(
+            "解密："
+            f"openssl enc -d -aes-256-cbc -pbkdf2 -iter {PBKDF2_ITERATIONS} "
+            f"-pass stdin -in {target} -out social.db"
+        )
     return 0
 
 
@@ -672,6 +716,7 @@ def cmd_quick_capture(args: argparse.Namespace) -> int:
 def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
     root = Path(args.db).parent
     captures_dir = resolve_captures_dir(args.db, getattr(args, "captures_dir", None))
+    keep_failed_image = bool(getattr(args, "keep_failed_image", False))
     use_accessibility = args.mode == "accessibility"
     contact_hint = _clean_window_title(getattr(args, "contact", None))
     image_path = None if use_accessibility else next_capture_path(root, captures_dir=captures_dir)
@@ -754,7 +799,7 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             # so another app's window (e.g. Finder) is never stored as WeChat
             # evidence.  The watch-mode error path removes the stray image.
             current_app = frontmost_app_status().name
-            target_apps = args.app or ["WeChat", "微信"]
+            target_apps = list(getattr(args, "app", None) or DEFAULT_WATCH_APPS)
             if current_app and current_app not in target_apps:
                 raise CaptureError(f"frontmost app changed during capture: {current_app}")
         result = ingest_capture(
@@ -773,8 +818,13 @@ def _capture_once(args: argparse.Namespace) -> CaptureOutcome:
             capture_backend=perception_backend,
             perception_status=perception_status,
         )
-    except (CaptureError, EmptyCaptureError):
-        if image_path is not None and getattr(args, "command", None) == "watch":
+    except Exception:
+        # This call created the file and nothing referenced it, so no caller
+        # can use it.  Applies to every entry point (watch, one-shot capture,
+        # MCP capture_commit) and to every failure, including a database error
+        # after OCR succeeded -- otherwise the capture directory fills with
+        # screenshots no record points at.
+        if image_path is not None and not keep_failed_image:
             _remove_duplicate_image(image_path)
         raise
     status = "inserted" if result.inserted else "duplicate"
@@ -844,11 +894,13 @@ def cmd_ocr_review(args: argparse.Namespace) -> int:
 
 
 def cmd_import_image(args: argparse.Namespace) -> int:
+    # Failures return 2 so scripts and aliases can tell a failed import from
+    # a successful one, matching ocr-review/brief.
     missing_paths = [path for path in args.images if not path.exists()]
     if missing_paths:
         targets = ", ".join(str(path) for path in missing_paths)
         print(f"找不到图片或目录：{targets}")
-        return 0
+        return 2
     unsupported_files = [
         path
         for path in args.images
@@ -860,7 +912,7 @@ def cmd_import_image(args: argparse.Namespace) -> int:
             f"不支持的图片类型：{targets}。"
             "支持的图片类型：png/jpg/jpeg/heic/tif/tiff。"
         )
-        return 0
+        return 2
     images = _expand_import_images(args.images)
     if not images:
         targets = ", ".join(str(path) for path in args.images)
@@ -868,7 +920,7 @@ def cmd_import_image(args: argparse.Namespace) -> int:
             f"没有找到可导入的图片：{targets}。"
             "支持的图片类型：png/jpg/jpeg/heic/tif/tiff。"
         )
-        return 0
+        return 2
     inserted_count = 0
     duplicate_count = 0
     image_attached_count = 0
@@ -1389,6 +1441,7 @@ def cmd_delete_contact(args: argparse.Namespace) -> int:
 
 
 def cmd_stop_watch(args: argparse.Namespace) -> int:
+    details = watch_process_details(db_path=args.db)
     pids = stop_watch_processes(dry_run=args.dry_run, db_path=args.db)
     if not pids:
         print("没有发现正在运行的自动截图进程。")
@@ -1398,6 +1451,14 @@ def cmd_stop_watch(args: argparse.Namespace) -> int:
         print(f"将停止自动截图进程：{pid_list}")
     else:
         print(f"已停止自动截图进程：{pid_list}")
+    # A watcher started without --db (the norm once the installer exports
+    # WSA_DB) cannot be attributed to a database, so it matches every
+    # selection.  Say so instead of silently stopping someone else's capture.
+    for pid, command_db in details:
+        if pid not in pids:
+            continue
+        origin = str(command_db) if command_db is not None else "命令行未指定 --db（匹配任意数据库）"
+        print(f"  pid={pid} db={origin}")
     return 0
 
 
@@ -1421,7 +1482,12 @@ def cmd_captures_dir(args: argparse.Namespace) -> int:
     if args.clear and args.path is not None:
         print("captures-dir error: use PATH or --clear, not both", file=sys.stderr)
         return 2
+    if args.purge_orphans and (args.path is not None or args.clear):
+        print("captures-dir error: use --purge-orphans on its own, not with PATH or --clear", file=sys.stderr)
+        return 2
     try:
+        if args.purge_orphans:
+            return _purge_orphan_captures(args)
         if args.path is not None:
             settings = save_captures_dir(args.db, args.path)
         elif args.clear:
@@ -1430,7 +1496,7 @@ def cmd_captures_dir(args: argparse.Namespace) -> int:
             settings = load_settings(args.db)
         resolved = resolve_captures_dir(args.db)
         if args.create:
-            resolved.mkdir(parents=True, exist_ok=True)
+            secure_directory(resolved)
     except (OSError, ValueError) as exc:
         print(f"captures-dir error: {exc}", file=sys.stderr)
         return 2
@@ -1444,6 +1510,36 @@ def cmd_captures_dir(args: argparse.Namespace) -> int:
         f"captures_dir={resolved} source={source} "
         f"settings={_display_settings_path(args.db)}"
     )
+    return 0
+
+
+def _purge_orphan_captures(args: argparse.Namespace) -> int:
+    """Delete WSA-created screenshots no capture row references anymore.
+
+    Reset and retention deliberately never touch unreferenced files, so the
+    crash-window orphans accumulate; this is the explicit, separately
+    confirmed way to retire them.  Without --yes it only lists.
+    """
+
+    init_db(args.db)
+    roots = capture_storage_roots(args.db)
+    with connect(args.db) as conn:
+        orphans = orphan_capture_images(conn, managed_roots=roots)
+    mode = "deleted" if args.yes else "found"
+    print(f"orphans {mode}: {len(orphans)}")
+    for path in orphans[:10]:
+        print(f"  orphan: {path}")
+    if len(orphans) > 10:
+        print(f"  ... 以及另外 {len(orphans) - 10} 个")
+    if not args.yes:
+        print("dry-run: 加 --yes 执行删除")
+        return 0
+    for path in orphans:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"captures-dir error: cannot remove {path}: {exc}", file=sys.stderr)
+            return 2
     return 0
 
 
@@ -1466,6 +1562,15 @@ def cmd_reset(args: argparse.Namespace) -> int:
         f"sources={result.removed_sources} "
         f"screenshots={result.removed_screenshots}"
     )
+    # A count alone does not let the user tell a throwaway database from
+    # their real screenshot library.  Always name the directory and show a
+    # sample of the files this run touches.
+    print(f"db: {result.db_path}")
+    print(f"captures dir: {result.captures_dir}")
+    for path in result.screenshot_paths[:5]:
+        print(f"  screenshot: {path}")
+    if len(result.screenshot_paths) > 5:
+        print(f"  ... 以及另外 {len(result.screenshot_paths) - 5} 张")
     return 0
 
 
@@ -2450,6 +2555,17 @@ def _matches_contact_value(value: str, needle: str, normalized_needle: str) -> b
     return bool(normalized_needle and normalized_needle in _normalize_contact_match_text(value))
 
 
+# --- SHARED VIEW SURFACE -------------------------------------------------
+# The helpers marked in tests/test_shared_view_surface.py are imported by
+# wsa.mcp_server (see the import block at the top of that module). They are
+# private to the package, not to this file: renaming or resiting one breaks
+# the MCP server at request time. The contract spans the whole file -- it
+# includes _capture_once near the top and the view/filter helpers here -- so
+# this marker is a pointer, not a boundary. A future refactor should lift
+# them into a dedicated wsa/views.py; until then, the shared-surface test
+# fails if this contract is broken silently.
+
+
 def _normalize_contact_match_text(value: str) -> str:
     return "".join(character for character in value.lower() if character.isalnum())
 
@@ -2681,11 +2797,12 @@ def _markdown_cell(value: str) -> str:
 
 def cmd_watch(args: argparse.Namespace) -> int:
     log_state = WatchLogState()
+    target_apps = list(getattr(args, "app", None) or DEFAULT_WATCH_APPS)
     _log_watch(args, "start", "watching frontmost WeChat window; press Ctrl-C to stop", app_name="-")
     while True:
         status = frontmost_app_status()
         app_name = status.name
-        if app_name and app_name in args.app:
+        if app_name and app_name in target_apps:
             try:
                 outcome = _capture_once(args)
                 print(outcome.output_line)
@@ -2697,11 +2814,43 @@ def cmd_watch(args: argparse.Namespace) -> int:
                     state=log_state,
                 )
             except (CaptureError, EmptyCaptureError) as exc:
-                _log_watch(args, "error", str(exc), app_name=app_name, state=log_state)
+                _safe_log_watch(args, "error", str(exc), app_name=app_name, state=log_state)
+            except Exception as exc:  # noqa: BLE001 - a watcher must outlive one bad cycle
+                # watch usually runs detached, so an unexpected failure (full
+                # disk, locked database, a helper binary disappearing) must be
+                # logged and retried rather than silently ending capture.
+                _safe_log_watch(
+                    args,
+                    "error",
+                    f"unexpected {type(exc).__name__}: {exc}",
+                    app_name=app_name,
+                    state=log_state,
+                )
         else:
             detail = f"{status.detail} via {status.method}" if not app_name else f"not target app via {status.method}"
-            _log_watch(args, "skip", detail, app_name=app_name or "unknown", state=log_state)
+            _safe_log_watch(args, "skip", detail, app_name=app_name or "unknown", state=log_state)
         time.sleep(max(5, _watch_interval(args)))
+
+
+def _safe_log_watch(
+    args: argparse.Namespace,
+    action: str,
+    detail: str,
+    *,
+    app_name: str,
+    state: WatchLogState | None = None,
+) -> None:
+    """Log a watch cycle outcome without letting logging kill the watcher.
+
+    These calls run inside the failure/skip branches: precisely when something
+    is already wrong (full disk, stderr closed after detaching), so a raise
+    here would defeat the catch-all that keeps capture alive.
+    """
+
+    try:
+        _log_watch(args, action, detail, app_name=app_name, state=state)
+    except BaseException:
+        pass
 
 
 def _read_text(args: argparse.Namespace) -> str:
@@ -2822,15 +2971,34 @@ def _watch_log_line(timestamp: str, *, app_name: str, action: str, detail: str) 
 
 
 def _append_watch_log(path: Path, line: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    secure_directory(path.parent)
+    _rotate_watch_log(path)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line)
         handle.write("\n")
+    secure_file(path)
+
+
+def _rotate_watch_log(path: Path) -> None:
+    """Keep one previous generation so a long-lived watch cannot fill the disk."""
+
+    try:
+        if path.exists() and path.stat().st_size >= WATCH_LOG_MAX_BYTES:
+            previous = path.with_name(path.name + ".1")
+            previous.unlink(missing_ok=True)
+            path.rename(previous)
+            secure_file(previous)
+    except OSError:
+        # Losing rotation must never stop capture logging.
+        pass
 
 
 def _write_text(path: Path, text: str) -> None:
+    # Reports and exports carry contact names and conversation excerpts, so
+    # they are owner-only even when written into a user-chosen directory.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    secure_file(path)
 
 
 def _log_value(value: str) -> str:

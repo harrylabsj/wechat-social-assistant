@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
@@ -225,6 +227,21 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("来自群聊", INDEX_HTML)
         self.assertIn("只读", INDEX_HTML)
 
+    def test_text_helper_is_not_shadowed_by_a_local_element(self):
+        """Renaming the escaper to ``text`` once collided with render-local
+        ``const text`` elements, so every timeline body threw TypeError at
+        runtime.  A static guard keeps the helper name unique."""
+
+        import re
+
+        shadows = re.findall(r"\b(?:const|let|var)\s+text\s*=", INDEX_HTML)
+        self.assertEqual(
+            1,
+            len(shadows),
+            "INDEX_HTML must declare the text() helper exactly once; "
+            "render-local elements must not shadow it (renders would throw)",
+        )
+
     @unittest.skipUnless(_loopback_bind_available(), "sandbox does not allow loopback socket binding")
     def test_http_routes_serve_dashboard_and_managed_image(self):
         image = self.captures / "route-test.png"
@@ -282,7 +299,12 @@ class WebDashboardTests(unittest.TestCase):
             body = json.dumps(
                 {"person_name": "王志平", "category": "朋友", "tags": "读书", "notes": "线下活动认识"}
             ).encode("utf-8")
-            request = Request(base + "/api/enrichment", data=body, headers={"Content-Type": "application/json"}, method="POST")
+            request = Request(
+                base + "/api/enrichment",
+                data=body,
+                headers={"Content-Type": "application/json", "X-WSA-Token": server.csrf_token},
+                method="POST",
+            )
             with urlopen(request, timeout=2) as response:
                 payload = json.loads(response.read())
             self.assertTrue(payload["saved"])
@@ -294,16 +316,131 @@ class WebDashboardTests(unittest.TestCase):
             self.assertEqual("读书", contact["tags"])
             self.assertEqual("线下活动认识", contact["notes"])
 
+            headers = {"Content-Type": "application/json", "X-WSA-Token": server.csrf_token}
             with self.assertRaises(HTTPError) as ctx:
-                urlopen(Request(base + "/api/nope", data=body, method="POST"), timeout=2)
+                urlopen(Request(base + "/api/nope", data=body, headers=headers, method="POST"), timeout=2)
             self.assertEqual(404, ctx.exception.code)
             with self.assertRaises(HTTPError) as ctx:
-                urlopen(Request(base + "/api/enrichment", data=b"not-json", method="POST"), timeout=2)
+                urlopen(
+                    Request(base + "/api/enrichment", data=b"not-json", headers=headers, method="POST"),
+                    timeout=2,
+                )
             self.assertEqual(400, ctx.exception.code)
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    @unittest.skipUnless(_loopback_bind_available(), "sandbox does not allow loopback socket binding")
+    def test_write_routes_reject_cross_site_and_untokened_requests(self):
+        """Loopback binding is not a browser boundary.
+
+        Any page the user visits can post to 127.0.0.1, and a DNS-rebinding
+        page can read from it, so the dashboard checks Host/Origin, requires a
+        JSON content type (which forces a preflight it never approves) and a
+        per-session token.
+        """
+
+        from urllib.error import HTTPError
+        from urllib.request import Request
+
+        ingest_capture(self.db, raw_text="王志平\n下周三见", contact_hint="王志平", source="manual")
+        server = DashboardHTTPServer(
+            ("127.0.0.1", 0),
+            DashboardHandler,
+            db_path=self.db,
+            captures_dir=self.captures,
+            log_file=self.root / "data" / "watch.log",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        body = json.dumps({"person_name": "王志平", "category": "攻击者写入"}).encode("utf-8")
+        try:
+            # No token.
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    Request(
+                        base + "/api/enrichment",
+                        data=body,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    ),
+                    timeout=2,
+                )
+            self.assertEqual(403, ctx.exception.code)
+
+            # Wrong token.
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    Request(
+                        base + "/api/enrichment",
+                        data=body,
+                        headers={"Content-Type": "application/json", "X-WSA-Token": "guessed"},
+                        method="POST",
+                    ),
+                    timeout=2,
+                )
+            self.assertEqual(403, ctx.exception.code)
+
+            # CORS "simple request" content type, which needs no preflight.
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    Request(
+                        base + "/api/enrichment",
+                        data=body,
+                        headers={"Content-Type": "text/plain", "X-WSA-Token": server.csrf_token},
+                        method="POST",
+                    ),
+                    timeout=2,
+                )
+            self.assertEqual(415, ctx.exception.code)
+
+            # Cross-site origin, even with a valid token.
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    Request(
+                        base + "/api/enrichment",
+                        data=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-WSA-Token": server.csrf_token,
+                            "Origin": "https://evil.example",
+                        },
+                        method="POST",
+                    ),
+                    timeout=2,
+                )
+            self.assertEqual(403, ctx.exception.code)
+
+            # Rebound hostname on a read route.
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    Request(base + "/api/crm", headers={"Host": "attacker.example"}),
+                    timeout=2,
+                )
+            self.assertEqual(403, ctx.exception.code)
+
+            # None of the rejected writes reached the database.
+            with urlopen(base + "/api/crm", timeout=2) as response:
+                crm = json.loads(response.read())
+            contact = next(item for item in crm["contacts"] if item["name"] == "王志平")
+            self.assertEqual("", contact["category"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_local_host_header_matches_only_this_server(self):
+        from wsa.web import _is_local_host_header
+
+        self.assertTrue(_is_local_host_header("127.0.0.1:8788", 8788))
+        self.assertTrue(_is_local_host_header("localhost:8788", 8788))
+        self.assertTrue(_is_local_host_header("[::1]:8788", 8788))
+        self.assertFalse(_is_local_host_header("127.0.0.1:9999", 8788))
+        self.assertFalse(_is_local_host_header("attacker.example:8788", 8788))
+        self.assertFalse(_is_local_host_header("127.0.0.1", 8788))
+        self.assertFalse(_is_local_host_header("", 8788))
 
     @unittest.skipUnless(_loopback_bind_available(), "sandbox does not allow loopback socket binding")
     def test_http_outreach_routes_list_and_update_drafts(self):
@@ -334,7 +471,12 @@ class WebDashboardTests(unittest.TestCase):
             self.assertEqual([created[0].id], [draft["id"] for draft in drafts])
 
             body = json.dumps({"draft_id": created[0].id, "action": "approve"}).encode("utf-8")
-            request = Request(base + "/api/outreach", data=body, headers={"Content-Type": "application/json"}, method="POST")
+            request = Request(
+                base + "/api/outreach",
+                data=body,
+                headers={"Content-Type": "application/json", "X-WSA-Token": server.csrf_token},
+                method="POST",
+            )
             with urlopen(request, timeout=2) as response:
                 payload = json.loads(response.read())
             self.assertEqual("approved", payload["draft"]["status"])

@@ -1,0 +1,48 @@
+{
+  "name": "wechat-social-assistant-expert",
+  "version": "1.0.1",
+  "description": "Local-first WeChat relationship review and user-reviewed follow-up drafting expert.",
+  "author": {
+    "name": "HaiDong Jiang"
+  },
+  "agents": ["./agents/wechat-social-assistant.md"],
+  "skills": [
+    "./skills/relationship-review",
+    "./skills/contact-brief-and-draft",
+    "./skills/consented-capture"
+  ],
+  "expertType": "agent",
+  "agentName": "wechat-social-assistant",
+  "displayName": {
+    "zh": "海纳·社交专家",
+    "en": "Haina · Social Expert"
+  },
+  "profession": {
+    "zh": "微信社交助手",
+    "en": "WeChat Social Assistant"
+  },
+  "displayDescription": {
+    "zh": "基于本地可见微信聊天记录，整理联系人背景与待办，识别值得跟进的人，并生成需要你审核的沟通草稿。",
+    "en": "Reviews locally captured visible WeChat conversations, organizes relationship context and follow-ups, and prepares drafts for your review."
+  },
+  "avatar": "avatars/wechat-social-assistant.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": {
+    "zh": "看看今天有哪些人值得跟进",
+    "en": "Who is worth following up with today?"
+  },
+  "plugin": "wechat-social-assistant-expert",
+  "tags": [
+    {"zh": "关系管理", "en": "Relationship Management"},
+    {"zh": "微信整理", "en": "WeChat Organization"},
+    {"zh": "跟进草稿", "en": "Follow-up Drafts"}
+  ],
+  "quickPrompts": [
+    {"zh": "看看今天有哪些人值得跟进", "en": "Who is worth following up with today?"},
+    {"zh": "回顾一位联系人的近况，帮我写跟进消息", "en": "Review a contact and draft a follow-up message"},
+    {"zh": "帮我开始记录微信聊天", "en": "Help me start recording a visible WeChat conversation"}
+  ],
+  "dependencies": {
+    "connectors": ["oc_a3f7d4a2da76c7cd"]
+  }
+}

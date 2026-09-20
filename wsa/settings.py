@@ -11,6 +11,55 @@ from typing import Any
 DEFAULT_WATCH_INTERVAL_SECONDS = 60
 MIN_WATCH_INTERVAL_SECONDS = 5
 CAPTURES_DIR_ENV = "WSA_CAPTURES_DIR"
+
+# WSA stores OCR'd WeChat conversations, chat screenshots and exports.  On a
+# shared machine the process umask would otherwise leave all of it
+# world-readable, which contradicts the product's local-privacy promise.
+DATA_FILE_MODE = 0o600
+DATA_DIR_MODE = 0o700
+
+
+def secure_directory(path: Path | str) -> Path:
+    """Create a data directory that only its owner can enter.
+
+    Only for directories WSA itself owns (the data directory, the captures
+    directory, the settings directory).  For the parent of a user-chosen
+    output file (``backup --out``, ``export-data --out``) use
+    :func:`ensure_output_directory` instead: chmod-ing a directory the user
+    did not create would re-permission unrelated parts of their filesystem.
+    """
+
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.chmod(DATA_DIR_MODE)
+    except OSError:
+        # A mounted volume (iCloud Drive, exFAT, a network share) may not
+        # support POSIX modes.  Storage still works; the caller decides
+        # whether a permissive filesystem is acceptable.
+        pass
+    return directory
+
+
+def ensure_output_directory(path: Path | str) -> Path:
+    """Create the parent directory of a user-chosen output file, without
+    changing the permissions of a directory that already exists."""
+
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def secure_file(path: Path | str) -> Path:
+    """Restrict an existing data file to its owner."""
+
+    target = Path(path)
+    try:
+        if target.exists():
+            target.chmod(DATA_FILE_MODE)
+    except OSError:
+        pass
+    return target
 ICLOUD_DOCUMENTS_ROOT = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
 ICLOUD_CAPTURE_RELATIVE = Path("codex") / "wechat-social-assistant" / "data" / "captures"
 
@@ -62,12 +111,22 @@ def save_captures_dir(db_path: Path | str, captures_dir: Path | str | None) -> W
 
 
 def resolve_captures_dir(db_path: Path | str, override: Path | str | None = None) -> Path:
-    """Resolve screenshot storage with explicit > env > settings > auto precedence."""
+    """Resolve screenshot storage with explicit > env > settings > auto precedence.
+
+    A relative ``WSA_CAPTURES_DIR`` is anchored at the database's directory,
+    not the current working directory: watch and purge run as separate
+    processes started from different directories, and a CWD-relative env
+    value would make them disagree about where screenshots live.
+    """
 
     if override not in (None, ""):
         return _normalize_captures_dir(override) or _local_captures_dir(db_path)
     env_value = os.environ.get(CAPTURES_DIR_ENV)
     if env_value:
+        text = str(env_value).strip()
+        if text and not Path(text).expanduser().is_absolute():
+            anchor = Path(db_path).expanduser().resolve(strict=False).parent
+            return (anchor / text).expanduser().resolve(strict=False)
         return _normalize_captures_dir(env_value) or _local_captures_dir(db_path)
     configured = load_settings(Path(db_path)).captures_dir
     if configured:
@@ -128,11 +187,12 @@ def _normalize_captures_dir(value: Any) -> Path | None:
 
 def _write_settings(db_path: Path | str, settings: WSASettings) -> None:
     path = settings_path_for_db(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    secure_directory(path.parent)
     payload: dict[str, Any] = {"watch_interval_seconds": settings.watch_interval_seconds}
     if settings.captures_dir:
         payload["captures_dir"] = settings.captures_dir
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    secure_file(path)
 
 
 def _coerce_interval(value: Any, *, strict: bool) -> int:

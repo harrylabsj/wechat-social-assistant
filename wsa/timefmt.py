@@ -18,6 +18,14 @@ def normalize_datetime(value: str) -> str:
     return parse_datetime(value).isoformat(timespec="seconds")
 
 
+def parse_datetime_or_now(value: str | None) -> datetime:
+    """Parse a timestamp, defaulting to the current local time when absent."""
+
+    if not value:
+        return datetime.now().astimezone()
+    return parse_datetime(value)
+
+
 def format_display_time(value: str) -> str:
     try:
         return parse_datetime(value).strftime("%Y-%m-%d %H:%M")

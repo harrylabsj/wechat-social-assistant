@@ -22,6 +22,7 @@ import mimetypes
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import sqlite3
 import sys
@@ -31,7 +32,7 @@ from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from .connectors import connector_statuses
-from .enrichment import record_contact_enrichment
+from .enrichment import update_contact_enrichment_fields
 from .outreach import UPDATE_CONFIRMATION_TEXT, outreach_to_dict, update_outreach_draft
 from .parser import extract_signals
 from .profiles import (
@@ -42,7 +43,6 @@ from .profiles import (
 )
 from .settings import capture_storage_roots, resolve_captures_dir
 from .status import _process_rows, detect_watch_processes
-from .store import connect
 from .suggestions import build_suggestions
 
 
@@ -51,28 +51,56 @@ DEFAULT_PORT = 8788
 LOW_CONFIDENCE_THRESHOLD = 0.75
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+CSRF_HEADER = "X-WSA-Token"
+CSRF_TOKEN_PLACEHOLDER = "__WSA_DASHBOARD_TOKEN__"
+
+
+def _is_local_host_header(value: str, expected_port: int) -> bool:
+    """Return whether a ``Host``/``Origin`` authority names this local server."""
+
+    authority = value.strip()
+    if not authority:
+        return False
+    if authority.startswith("["):  # IPv6 literal, e.g. [::1]:8788
+        host, _, port = authority.partition("]")
+        host = host[1:]
+        port = port.lstrip(":")
+    else:
+        host, _, port = authority.partition(":")
+    if host.lower() not in LOCAL_HOSTS:
+        return False
+    if not port:
+        return False
+    try:
+        return int(port) == int(expected_port)
+    except ValueError:
+        return False
 
 # The OCR stream contains UI labels and generated text that can look like a
 # person name.  They are useful in the evidence layer, but should not become
 # CRM contacts.  Keep this filter deliberately conservative: nicknames such as
 # “老婆” are valid contacts and therefore remain visible.
+#
+# Only generic WeChat/app chrome belongs here.  Fragments of one person's own
+# conversations must never be hardcoded into a published package -- they are
+# private data, and they generalise to nobody else's screenshots.  A user who
+# wants to hide extra strings maintains them locally; see
+# ``LOCAL_NOISE_FILENAME``.
 CRM_NOISE_NAME_RE = re.compile(
     r"(?:积分|充值|兑换码|有效期|购买|赠送|ChatGPT|GPT|Cronjob|Pro[〉>]|账户|状态|来源|搜索|发送|聊天信息"
-    r"|取消|转发|置顶|放大阅读|用窗口打开|条记录|条新消息|共\d*条|撤回|拍了拍|展开全部|免费|刚睡醒|深有同感)",
+    r"|取消|转发|置顶|放大阅读|用窗口打开|条记录|条新消息|共\d*条|撤回|拍了拍|展开全部|免费)",
     re.IGNORECASE,
 )
 CRM_NOISE_PHRASES = {
-    "就和我说",
-    "大家都喜欢",
     "当前积分（+）",
     "总积分（+）",
     "活动赠送",
-    "购买0．赠送 100",
-    "工心士",
-    "真大佬",
     "未知联系人",
     "微信会话列表",
 }
+# Optional, user-maintained noise terms next to the database: a JSON array of
+# strings.  Absent or malformed means "no extra terms".
+LOCAL_NOISE_FILENAME = "crm-noise.json"
 CRM_FILLER_NAMES = {
     "嗯嗯",
     "好的",
@@ -323,9 +351,22 @@ def _crm_normalize_name(name: str) -> str:
     return re.sub(r"\s+", "", str(name or ""))
 
 
-def _crm_noise_name(name: str, *, kind: str = "") -> bool:
+def load_local_noise_terms(db_path: Path) -> frozenset[str]:
+    """Read the user's own noise terms from ``<db dir>/crm-noise.json``."""
+
+    path = Path(db_path).expanduser().parent / LOCAL_NOISE_FILENAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    if not isinstance(payload, list):
+        return frozenset()
+    return frozenset(_crm_normalize_name(item) for item in payload if isinstance(item, str) and item.strip())
+
+
+def _crm_noise_name(name: str, *, kind: str = "", extra: frozenset[str] = frozenset()) -> bool:
     cleaned = _crm_normalize_name(name)
-    if not cleaned or cleaned in CRM_NOISE_PHRASES or cleaned in CRM_FILLER_NAMES:
+    if not cleaned or cleaned in CRM_NOISE_PHRASES or cleaned in CRM_FILLER_NAMES or cleaned in extra:
         return True
     if CRM_NOISE_NAME_RE.search(cleaned):
         return True
@@ -456,7 +497,10 @@ def save_contact_meta(
 
     This is the dashboard's single write path.  It merges the three editable
     fields into any existing enrichment record instead of replacing it, so
-    company/role/context imported from other sources are not lost.
+    company/role/context imported from other sources are not lost.  The merge
+    itself runs inside one write transaction (see
+    ``update_contact_enrichment_fields``): two dashboard tabs saving the same
+    contact concurrently each keep the other's fields.
     """
 
     db = Path(db_path).expanduser().resolve(strict=False)
@@ -471,11 +515,6 @@ def save_contact_meta(
             if _table_exists(conn, "people")
             else []
         )
-        rows = (
-            conn.execute("select person_name, fields_json from contact_enrichments").fetchall()
-            if _table_exists(conn, "contact_enrichments")
-            else []
-        )
     # The CRM view normalizes OCR spacing in display names; write the metadata
     # back onto the real people row when exactly one normalized match exists.
     if name not in people_names:
@@ -483,32 +522,24 @@ def save_contact_meta(
         matches = [candidate for candidate in people_names if _crm_normalize_name(candidate) == normalized]
         if len(matches) == 1:
             name = matches[0]
-    existing: dict[str, str] = {}
-    for row in rows:
-        if str(row["person_name"]) == name:
-            try:
-                payload = json.loads(row["fields_json"] or "{}")
-            except (TypeError, ValueError):
-                payload = {}
-            if isinstance(payload, dict):
-                existing = {str(key): str(value) for key, value in payload.items() if value}
-            break
-    merged = dict(existing)
-    for key in CONTACT_META_FIELDS:
-        raw = str(updates.get(key) or "").strip()
-        value = raw if key == "notes" else " ".join(raw.split())
-        value = value[:500]
-        if value:
-            merged[key] = value
-        else:
-            merged.pop(key, None)
-    if merged:
-        record = record_contact_enrichment(db, person_name=name, fields=merged, source="dashboard")
+
+    def _merge_dashboard_fields(existing: dict[str, str]) -> dict[str, str]:
+        merged = dict(existing)
+        for key in CONTACT_META_FIELDS:
+            raw = str(updates.get(key) or "").strip()
+            value = raw if key == "notes" else " ".join(raw.split())
+            value = value[:500]
+            if value:
+                merged[key] = value
+            else:
+                merged.pop(key, None)
+        return merged
+
+    record = update_contact_enrichment_fields(
+        db, person_name=name, update=_merge_dashboard_fields
+    )
+    if record is not None:
         return {"person_name": record.person_name, "fields": record.fields, "saved": True}
-    if existing:
-        with connect(db) as conn:
-            conn.execute("delete from contact_enrichments where person_name = ?", (name,))
-            conn.commit()
     return {"person_name": name, "fields": {}, "saved": True}
 
 
@@ -533,7 +564,10 @@ def _outreach_payload(db: Path, *, status: str | None = None) -> list[dict[str, 
     return [dict(row) for row in rows]
 
 
-def _crm_capture_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+CRM_CAPTURE_SCAN_LIMIT = 5000
+
+
+def _crm_capture_rows(conn: sqlite3.Connection, *, limit: int = CRM_CAPTURE_SCAN_LIMIT) -> list[sqlite3.Row]:
     if not _table_exists(conn, "captures"):
         return []
     return conn.execute(
@@ -544,7 +578,9 @@ def _crm_capture_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         from captures c
         join people p on p.id = c.person_id
         order by c.captured_at desc, c.id desc
-        """
+        limit ?
+        """,
+        (int(limit),),
     ).fetchall()
 
 
@@ -662,7 +698,9 @@ def build_crm_view(
     try:
         suggestions = {
             item.person_name: item
-            for item in build_suggestions(db, as_of=payload["generated_at"], limit=1000, min_score=0)
+            for item in build_suggestions(
+                db, as_of=payload["generated_at"], limit=1000, min_score=0, profiles=profiles
+            )
         }
     except (OSError, sqlite3.DatabaseError, ValueError, TypeError):
         suggestions = {}
@@ -671,6 +709,7 @@ def build_crm_view(
     bounded_timeline = max(1, min(30, int(timeline_limit)))
     now = datetime.now().astimezone()
     contacts: list[dict[str, Any]] = []
+    local_noise = load_local_noise_terms(db)
 
     # Group speakers are only surfaced when they already exist in the local
     # contact list: a direct-chat title or a manual enrichment record.
@@ -681,7 +720,9 @@ def build_crm_view(
     } | set(enrichment_map.keys())
 
     for profile in profiles:
-        if profile.kind not in {"direct", "speaker"} or _crm_noise_name(profile.name, kind=profile.kind):
+        if profile.kind not in {"direct", "speaker"} or _crm_noise_name(
+            profile.name, kind=profile.kind, extra=local_noise
+        ):
             continue
         if profile.kind == "speaker" and _crm_normalize_name(profile.name) not in known_names:
             continue
@@ -1124,6 +1165,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.db_path = db_path
         self.captures_dir = captures_dir
         self.log_file = log_file
+        # Binding to loopback keeps other machines out; it does nothing about
+        # the browser.  Any page the user visits can post to 127.0.0.1, and a
+        # DNS-rebinding page can read from it.  The token below is embedded in
+        # the served page and required on every write.
+        self.csrf_token = secrets.token_urlsafe(32)
 
 
 class IPv6DashboardHTTPServer(DashboardHTTPServer):
@@ -1133,12 +1179,39 @@ class IPv6DashboardHTTPServer(DashboardHTTPServer):
 class DashboardHandler(BaseHTTPRequestHandler):
     server: DashboardHTTPServer
 
+    def _trusted_origin(self) -> bool:
+        """Reject requests a browser sent from somewhere other than this page.
+
+        ``Host`` defeats DNS rebinding: a rebound page still sends the
+        attacker's hostname.  ``Origin``/``Referer`` defeat ordinary
+        cross-site requests.  A direct client (curl, a test) sends neither
+        Origin nor Referer, which stays allowed.
+        """
+
+        host = (self.headers.get("Host") or "").strip()
+        if host and not _is_local_host_header(host, self.server.server_port):
+            return False
+        for header in ("Origin", "Referer"):
+            value = (self.headers.get(header) or "").strip()
+            if not value:
+                continue
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"}:
+                return False
+            if not _is_local_host_header(parsed.netloc, self.server.server_port):
+                return False
+        return True
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
         parsed = urlparse(self.path)
         path = parsed.path
+        if not self._trusted_origin():
+            self._send_error_json(403, "cross-origin request rejected")
+            return
         try:
             if path == "/":
-                self._send_bytes(INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
+                page = INDEX_HTML.replace(CSRF_TOKEN_PLACEHOLDER, self.server.csrf_token)
+                self._send_bytes(page.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if path == "/api/overview":
                 overview = build_overview(
@@ -1207,8 +1280,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
 
         parsed = urlparse(self.path)
+        if not self._trusted_origin():
+            self._send_error_json(403, "cross-origin request rejected")
+            return
         if parsed.path not in {"/api/enrichment", "/api/outreach"}:
             self._send_error_json(404, "not found")
+            return
+        # A JSON content type cannot be produced by a CORS "simple request",
+        # so requiring it forces a preflight that this server never approves.
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_error_json(415, "write requests must use Content-Type: application/json")
+            return
+        if not secrets.compare_digest(
+            (self.headers.get(CSRF_HEADER) or "").strip(), self.server.csrf_token
+        ):
+            self._send_error_json(403, "missing or invalid dashboard token")
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1271,6 +1358,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Screenshots and contact JSON must not be embeddable or fetchable by
+        # another origin even if a browser would otherwise allow it.
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Referrer-Policy", "no-referrer")
+        # The CSRF token is embedded in the served page, so a framing defense
+        # matters too: an attacker page that iframes the real panel gets its
+        # clicks on the real page, which sends writes with the real token.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1431,7 +1527,11 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (value) => value == null ? '' : String(value);
+const DASHBOARD_TOKEN='__WSA_DASHBOARD_TOKEN__';
+// Renders null/undefined as an empty cell. Deliberately NOT an HTML escaper:
+// every caller assigns through textContent, which escapes on its own. Never
+// use this to build markup.
+const text = (value) => value == null ? '' : String(value);
 const fmtTime = (value) => { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', {hour12:false}); };
 let crmData = null;
 let selectedName = null;
@@ -1441,10 +1541,10 @@ function pill(text, kind='') { const span=document.createElement('span'); span.c
 function contactText(contact) { return [contact.name, contact.summary, contact.category, contact.tags, contact.notes, ...(contact.source_chats||[]), ...(contact.timeline||[]).map((event)=>event.summary)].join('\n'); }
 function renderStats() {
   const stats=(crmData&&crmData.stats)||{};
-  $('statContacts').textContent=esc(stats.contacts ?? 0);
-  $('statInteractions').textContent=esc(stats.interactions ?? 0);
-  $('statActive').textContent=esc(stats.active_7d ?? 0);
-  $('statFollowups').textContent=esc(stats.followups ?? 0);
+  $('statContacts').textContent=text(stats.contacts ?? 0);
+  $('statInteractions').textContent=text(stats.interactions ?? 0);
+  $('statActive').textContent=text(stats.active_7d ?? 0);
+  $('statFollowups').textContent=text(stats.followups ?? 0);
 }
 function renderNotice() {
   const box=$('crmNotice'); box.replaceChildren();
@@ -1460,7 +1560,7 @@ function renderList() {
   contacts.forEach((contact)=>{
     const item=document.createElement('button'); item.type='button'; item.className='contact-item'+(contact.name===selectedName?' selected':'');
     const top=document.createElement('div'); top.className='contact-top';
-    const name=document.createElement('span'); name.className='contact-name'; name.textContent=esc(contact.name);
+    const name=document.createElement('span'); name.className='contact-name'; name.textContent=text(contact.name);
     top.append(name, pill(`${contact.interaction_count} 次`, 'good'));
     const meta=document.createElement('div'); meta.className='meta-row'; meta.style.marginTop='6px';
     meta.appendChild(pill(contact.kind_label||'', 'blue'));
@@ -1468,7 +1568,7 @@ function renderList() {
     if(contact.category) meta.appendChild(pill(contact.category, 'good'));
     (String(contact.tags||'').split(/[,，]/).map((tag)=>tag.trim()).filter(Boolean)).slice(0,3).forEach((tag)=>meta.appendChild(pill(`#${tag}`)));
     const time=document.createElement('span'); time.className='muted small'; time.textContent=fmtTime(contact.last_interaction_at); meta.appendChild(time);
-    const snippet=document.createElement('div'); snippet.className='contact-snippet'; snippet.textContent=esc(contact.summary||'');
+    const snippet=document.createElement('div'); snippet.className='contact-snippet'; snippet.textContent=text(contact.summary||'');
     item.append(top, meta, snippet);
     item.addEventListener('click',()=>{ selectedName=contact.name; editingMeta=false; renderList(); renderDetail(); });
     list.appendChild(item);
@@ -1479,7 +1579,7 @@ function renderDetail() {
   const contact=((crmData&&crmData.contacts)||[]).find((item)=>item.name===selectedName);
   if(!contact){ const empty=document.createElement('div'); empty.className='empty-detail'; empty.textContent='从左侧选择一个联系人，查看谈话时间线。'; panel.appendChild(empty); return; }
   const titleWrap=document.createElement('div');
-  const title=document.createElement('h2'); title.textContent=esc(contact.name); titleWrap.appendChild(title);
+  const title=document.createElement('h2'); title.textContent=text(contact.name); titleWrap.appendChild(title);
   const meta=document.createElement('div'); meta.className='meta-row';
   meta.appendChild(pill(contact.kind_label||'', 'blue'));
   (contact.source_chats||[]).forEach((chat)=>meta.appendChild(pill(chat===contact.name ? `会话：${chat}` : `来自群聊：${chat}`, chat===contact.name ? '' : 'blue')));
@@ -1536,7 +1636,7 @@ function renderDetail() {
     if(event.source_chat) eventMeta.appendChild(pill(event.source_chat,'blue'));
     if(event.source) eventMeta.appendChild(pill(event.source));
     card.appendChild(eventMeta);
-    const text=document.createElement('div'); text.className='event-text'; text.textContent=esc(event.summary||''); card.appendChild(text);
+    const body=document.createElement('div'); body.className='event-text'; body.textContent=text(event.summary||''); card.appendChild(body);
     if((event.signals||[]).length){ const row=document.createElement('div'); row.className='event-signals'; event.signals.forEach((signal)=>row.appendChild(pill(`${signal.kind}：${signal.phrase}`,'good'))); card.appendChild(row); }
     if(event.image_available){
       const toggle=document.createElement('button'); toggle.type='button'; toggle.className='small'; toggle.style.marginTop='8px'; toggle.textContent='查看截图';
@@ -1566,7 +1666,7 @@ async function refresh() {
 async function saveMeta(name, statusEl) {
   statusEl.textContent='保存中…'; statusEl.style.color='';
   try {
-    const response=await fetch('/api/enrichment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_name:name,category:$('metaCategory').value,tags:$('metaTags').value,notes:$('metaNotes').value})});
+    const response=await fetch('/api/enrichment',{method:'POST',headers:{'Content-Type':'application/json','X-WSA-Token':DASHBOARD_TOKEN},body:JSON.stringify({person_name:name,category:$('metaCategory').value,tags:$('metaTags').value,notes:$('metaNotes').value})});
     if(!response.ok){ const body=await response.json().catch(()=>({})); throw new Error(body.error||'保存失败'); }
     const result=await response.json();
     const contact=((crmData&&crmData.contacts)||[]).find((item)=>item.name===name);
@@ -1584,7 +1684,7 @@ function renderOutreach(drafts) {
   visible.forEach((draft)=>{
     const card=document.createElement('div'); card.className='draft';
     const head=document.createElement('div'); head.className='draft-head';
-    const name=document.createElement('span'); name.className='draft-name'; name.textContent=esc(draft.person_name);
+    const name=document.createElement('span'); name.className='draft-name'; name.textContent=text(draft.person_name);
     name.addEventListener('click',()=>{ selectedName=draft.person_name; editingMeta=false; renderList(); renderDetail(); });
     head.appendChild(name);
     head.appendChild(pill(DRAFT_STATUS_LABELS[draft.status]||draft.status, draft.status==='approved'?'good':draft.status==='sent'?'blue':''));
@@ -1592,8 +1692,8 @@ function renderOutreach(drafts) {
     if(draft.topic) head.appendChild(pill(draft.topic));
     head.appendChild(pill(draft.send_mode==='computer_use'?'computer use':'手动发送', draft.send_mode==='computer_use'?'warn':''));
     const time=document.createElement('span'); time.className='muted small'; time.textContent=fmtTime(draft.updated_at); head.appendChild(time);
-    const text=document.createElement('div'); text.className='draft-text'; text.textContent=esc(draft.draft_text);
-    card.append(head, text);
+    const body=document.createElement('div'); body.className='draft-text'; body.textContent=text(draft.draft_text);
+    card.append(head, body);
     const actions=document.createElement('div'); actions.className='draft-actions';
     const addButton=(label, action)=>{ const button=document.createElement('button'); button.type='button'; button.textContent=label; button.addEventListener('click',()=>draftAction(draft.id, action)); actions.appendChild(button); };
     if(draft.status==='draft'){ addButton('批准','approve'); addButton('驳回','dismiss'); }
@@ -1604,14 +1704,18 @@ function renderOutreach(drafts) {
 }
 async function draftAction(id, action) {
   try {
-    const response=await fetch('/api/outreach',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draft_id:id,action})});
+    const response=await fetch('/api/outreach',{method:'POST',headers:{'Content-Type':'application/json','X-WSA-Token':DASHBOARD_TOKEN},body:JSON.stringify({draft_id:id,action})});
     if(!response.ok){ const body=await response.json().catch(()=>({})); throw new Error(body.error||'操作失败'); }
     refresh();
   } catch(error) { $('updatedAt').textContent=error.message; $('updatedAt').className='error small'; }
 }
 $('refresh').addEventListener('click',refresh);
 $('contactSearch').addEventListener('input',(event)=>{ searchText=event.target.value.trim(); renderList(); });
-refresh(); setInterval(refresh,10000);
+refresh();
+// A background tab does not need a full CRM rebuild every 10s; refresh
+// once when it becomes visible again instead.
+setInterval(()=>{ if(!document.hidden) refresh(); },10000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refresh(); });
 </script>
 </body>
 </html>

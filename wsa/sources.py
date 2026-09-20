@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email import policy
 from email.parser import Parser
 from email.utils import getaddresses, parsedate_to_datetime
@@ -526,14 +526,21 @@ def _attendee_names(event: str) -> list[str]:
 def _parse_compact_datetime(value: str | None) -> str | None:
     if not value:
         return None
-    cleaned = value.strip().rstrip("Z")
+    text = value.strip()
+    # ``rstrip("Z")`` used to strip every trailing Z and silently drop the
+    # UTC marker, producing a naive timestamp that string-sorted below
+    # offset-bearing ones.
+    utc = text.endswith("Z")
+    cleaned = text[:-1] if utc else text
     for fmt in ("%Y%m%dT%H%M%S", "%Y%m%d"):
         try:
             parsed = datetime.strptime(cleaned, fmt)
         except ValueError:
             continue
+        if utc:
+            parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.isoformat()
-    return value
+    return None
 
 
 def _markdown_title(text: str) -> str | None:
@@ -577,8 +584,11 @@ def _email_date(value: str | None) -> str | None:
         return None
     try:
         return parsedate_to_datetime(value).isoformat(timespec="seconds")
-    except (TypeError, ValueError):
-        return value
+    except (TypeError, ValueError, IndexError):
+        # Storing the raw header would poison string-ordered "latest
+        # interaction" comparisons and crash the suggestion pipeline's date
+        # parsing; no reliable date means no date.
+        return None
 
 
 def _email_body(message) -> str:
@@ -624,8 +634,33 @@ def _source_from_row(row) -> RelationshipSource:
     )
 
 
+_QUOTED_PRINTABLE_TOKEN = re.compile(r"(?:=[0-9A-F]{2})+")
+
+
+def _decode_quoted_printable(value: str) -> str:
+    """Decode a QUOTED-PRINTABLE run (``=E5=...``) as UTF-8.
+
+    Chinese contact exports encode names this way; without decoding, the raw
+    ``=XX`` bytes become the contact's name.  Only contiguous ``=XX`` runs are
+    touched, and an invalid UTF-8 sequence is left as written.
+    """
+
+    if "=" not in value:
+        return value
+
+    def _decode(match: re.Match[str]) -> str:
+        raw = bytes.fromhex(match.group(0).replace("=", ""))
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return match.group(0)
+
+    return _QUOTED_PRINTABLE_TOKEN.sub(_decode, value)
+
+
 def _clean_escaped(value: str) -> str:
-    return value.replace("\\n", "\n").replace("\\,", ",").replace("\\;", ";").strip()
+    cleaned = value.replace("\\n", "\n").replace("\\,", ",").replace("\\;", ";").strip()
+    return _decode_quoted_printable(cleaned)
 
 
 def _dedupe(items) -> list[str]:

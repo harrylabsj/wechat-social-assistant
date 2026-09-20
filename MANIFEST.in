@@ -1,0 +1,12 @@
+# The published source distribution ships the installable package only.
+# Test fixtures are development material and must not reach PyPI users.
+prune tests
+prune reports
+prune data
+prune bin
+prune build
+exclude .private-denylist
+exclude install.sh
+recursive-include wsa/native *.swift
+recursive-include wsa/fixtures *.json
+include LICENSE README.md CHANGELOG.md SECURITY.md

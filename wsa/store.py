@@ -7,10 +7,17 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from typing import Sequence
 
 from .parser import Signal, extract_signals, parse_capture
 from .observations import OCRObservation, normalize_observations
-from .settings import capture_storage_roots, resolve_captures_dir
+from .settings import (
+    capture_storage_roots,
+    ensure_output_directory,
+    resolve_captures_dir,
+    secure_directory,
+    secure_file,
+)
 
 
 class EmptyCaptureError(ValueError):
@@ -316,6 +323,7 @@ class ResetResult:
     removed_sources: int
     removed_screenshots: int
     dry_run: bool = False
+    screenshot_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -365,11 +373,11 @@ def backup_database(
         raise ValueError("backup path must differ from the source database")
     if target.exists() and not overwrite:
         raise FileExistsError(f"backup already exists: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_output_directory(target.parent)
     with sqlite3.connect(source, timeout=5.0) as source_conn:
         with sqlite3.connect(target, timeout=5.0) as target_conn:
             source_conn.backup(target_conn)
-    return target
+    return secure_file(target)
 
 
 def schema_version(db_path: Path | str) -> int:
@@ -398,11 +406,15 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 def init_db(db_path: Path | str) -> None:
     path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    secure_directory(path.parent)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
         _apply_schema_migrations(conn)
         conn.commit()
+    # SQLite derives -wal/-shm permissions from the database file, so tighten
+    # the main file as soon as it exists.
+    for companion in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        secure_file(companion)
 
 
 def ingest_capture(
@@ -586,6 +598,16 @@ def reset_memory(
         removed_candidates = int(conn.execute("select count(*) from relationship_candidates").fetchone()[0])
         removed_enrichments = int(conn.execute("select count(*) from contact_enrichments").fetchone()[0])
         removed_sources = int(conn.execute("select count(*) from relationship_sources").fetchone()[0])
+        # Resolve the file list from this database's own rows *before* the
+        # rows go away.  Screenshots that no capture in this database owns --
+        # another database's captures, user-imported images, orphans left by
+        # a failed capture -- are never touched by reset.
+        capture_ids = [int(row["id"]) for row in conn.execute("select id from captures").fetchall()]
+        screenshot_files = owned_capture_images(
+            conn,
+            capture_ids,
+            managed_roots=capture_storage_roots(db, captures_dir),
+        )
         if not dry_run:
             conn.execute("delete from capture_signals")
             conn.execute("delete from captures")
@@ -596,7 +618,6 @@ def reset_memory(
             conn.execute("delete from relationship_sources")
             conn.commit()
 
-    screenshot_files = _unique_screenshot_files(capture_storage_roots(db, captures_dir))
     if not dry_run:
         for path in screenshot_files:
             path.unlink(missing_ok=True)
@@ -613,6 +634,7 @@ def reset_memory(
         removed_sources=removed_sources,
         removed_screenshots=len(screenshot_files),
         dry_run=dry_run,
+        screenshot_paths=tuple(screenshot_files),
     )
 
 
@@ -793,6 +815,16 @@ def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
 def _migration_v1_structured_ocr(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "captures", "image_path", "text")
     _ensure_column(conn, "captures", "image_managed", "integer not null default 0")
+    # Both columns arrive empty together, and no import feature existed at
+    # this point in the schema's history, so any path a pre-migration build
+    # had recorded could only have been written by WSA itself.  Without this
+    # backfill the ownership rule in owned_capture_images would refuse to
+    # retire those screenshots forever (the bit stays 0 for their lifetime).
+    # Later migrations must NOT repeat this blanket update: from v1 on, a 0
+    # bit can mean a genuine user import and has to keep winning.
+    conn.execute(
+        "update captures set image_managed = 1 where image_path is not null and image_path != ''"
+    )
     conn.executescript(
         """
         create table if not exists ocr_observations (
@@ -1205,26 +1237,6 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
 
 
-def _screenshot_files(path: Path) -> list[Path]:
-    if not path.exists():
-        return []
-    suffixes = {".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"}
-    return sorted(item for item in path.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
-
-
-def _unique_screenshot_files(paths: tuple[Path, ...]) -> list[Path]:
-    seen: set[Path] = set()
-    files: list[Path] = []
-    for path in paths:
-        for item in _screenshot_files(path):
-            resolved = item.resolve(strict=False)
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            files.append(item)
-    return sorted(files)
-
-
 def _is_managed_capture_path(db_path: Path | str, image_path: str | None) -> bool:
     if not image_path:
         return False
@@ -1235,3 +1247,127 @@ def _is_managed_capture_path(db_path: Path | str, image_path: str | None) -> boo
     except (OSError, ValueError):
         return False
     return True
+
+
+def owned_capture_images(
+    conn: sqlite3.Connection,
+    capture_ids: Sequence[int],
+    *,
+    managed_roots: tuple[Path, ...],
+) -> list[Path]:
+    """Return the screenshots that deleting ``capture_ids`` may remove.
+
+    This is the single ownership rule for every delete path in WSA (reset,
+    delete-contact, retention purge).  A file qualifies only when all four
+    conditions hold:
+
+    1. a capture in the affected set references it;
+    2. that row carries the explicit ``image_managed`` ownership bit, so a
+       user-imported image is never deleted even if it happens to sit inside
+       a managed directory;
+    3. the file resolves inside one of ``managed_roots``;
+    4. no capture outside the affected set still references it.
+
+    Everything else on disk stays: another database's screenshots, imported
+    references, and orphans left behind by a failed capture.  Deleting by
+    *directory* instead of by *reference* is how a reset against a throwaway
+    database once wiped a real screenshot library.
+    """
+
+    ids = [int(value) for value in capture_ids]
+    if not ids:
+        return []
+    rows: list[sqlite3.Row] = []
+    # Chunk the id list: SQLite bounds the number of host parameters (999 on
+    # old builds, 32766 since 3.32) and a multi-year reset exceeds both.
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        placeholders = ", ".join("?" for _ in chunk)
+        rows.extend(
+            conn.execute(
+                f"""
+                select distinct image_path, image_managed
+                from captures
+                where id in ({placeholders})
+                  and image_path is not null
+                  and image_path != ''
+                """,
+                chunk,
+            ).fetchall()
+        )
+    candidates: list[Path] = []
+    for row in rows:
+        if not bool(row["image_managed"]):
+            continue
+        path = Path(str(row["image_path"])).expanduser().resolve(strict=False)
+        if not any(is_relative_to(path, root) for root in managed_roots):
+            continue
+        candidates.append(path)
+    if not candidates:
+        return []
+    # One pass over every other reference, compared as resolved paths: the
+    # same file written as ``~/...`` and as an absolute path must count as a
+    # second reference, or a raw-string count under-counts and the file is
+    # deleted under a surviving capture.
+    excluded = set(ids)
+    surviving: set[Path] = set()
+    for row in conn.execute(
+        "select id, image_path from captures where image_path is not null and image_path != ''"
+    ).fetchall():
+        if int(row["id"]) in excluded:
+            continue
+        surviving.add(Path(str(row["image_path"])).expanduser().resolve(strict=False))
+    return sorted(path for path in set(candidates) if path not in surviving and path.is_file())
+
+
+def is_relative_to(path: Path, root: Path) -> bool:
+    """Return whether ``path`` sits inside ``root`` after resolution."""
+
+    try:
+        path.relative_to(root.expanduser().resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+_CAPTURE_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff"})
+
+
+def orphan_capture_images(
+    conn: sqlite3.Connection,
+    *,
+    managed_roots: tuple[Path, ...],
+) -> list[Path]:
+    """Return WSA-created image files no capture row references anymore.
+
+    Orphans appear when a process dies between committing a delete and
+    unlinking the file, and were left behind by failed captures before the
+    cleanup paths existed.  Only files carrying the WSA capture filename
+    pattern (``wechat-*.png`` and friends) inside a managed root are
+    candidates: a user import, another database's screenshots, and every
+    non-WSA file in the directory are never returned.  ``reset`` deliberately
+    does not touch orphans; retiring them is an explicit
+    ``wsa captures-dir --purge-orphans`` decision.
+    """
+
+    referenced: set[Path] = set()
+    for row in conn.execute(
+        "select image_path from captures where image_path is not null and image_path != ''"
+    ).fetchall():
+        referenced.add(Path(str(row["image_path"])).expanduser().resolve(strict=False))
+    orphans: set[Path] = set()
+    for root in managed_roots:
+        root = root.expanduser().resolve(strict=False)
+        if not root.is_dir():
+            continue
+        for item in root.iterdir():
+            if not item.is_file():
+                continue
+            if item.suffix.lower() not in _CAPTURE_IMAGE_SUFFIXES:
+                continue
+            if not item.name.startswith("wechat-"):
+                continue
+            resolved = item.resolve(strict=False)
+            if resolved not in referenced:
+                orphans.add(resolved)
+    return sorted(orphans)

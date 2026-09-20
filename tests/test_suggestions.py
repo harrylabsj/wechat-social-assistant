@@ -1,3 +1,5 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import sqlite3
 import tempfile
 import unittest
@@ -8,6 +10,50 @@ from wsa.store import ingest_capture, init_db
 
 
 class SuggestionTests(unittest.TestCase):
+    def test_malformed_last_interaction_at_does_not_kill_the_pipeline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="钱七\n下周有空聊聊吗？",
+                contact_hint="钱七",
+                source="test",
+                captured_at="2026-05-20T09:00:00+08:00",
+            )
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    "update people set last_interaction_at = 'not-a-date' where name = '钱七'"
+                )
+                conn.commit()
+
+            suggestions = build_suggestions(db_path, as_of="2026-05-26T09:00:00+08:00")
+
+            self.assertNotIn("钱七", [item.person_name for item in suggestions])
+
+    def test_direct_and_speaker_suggestions_for_one_name_are_deduped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "social.db"
+            init_db(db_path)
+            ingest_capture(
+                db_path,
+                raw_text="孙七\n上次的问题你还没回复我。",
+                contact_hint="孙七",
+                source="test",
+                captured_at="2026-05-25T09:00:00+08:00",
+            )
+            ingest_capture(
+                db_path,
+                raw_text="项目群（2）\n孙七\n上次的问题你还没回复我。",
+                contact_hint="项目群（2）",
+                source="test",
+                captured_at="2026-05-24T09:00:00+08:00",
+            )
+
+            suggestions = build_suggestions(db_path, as_of="2026-05-26T09:00:00+08:00")
+
+            names = [item.person_name for item in suggestions]
+            self.assertEqual(len(names), len(set(names)))
     def test_build_suggestions_prioritizes_unanswered_and_project_followup(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "social.db"

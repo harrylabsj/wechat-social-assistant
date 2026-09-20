@@ -12,3 +12,6 @@ dist/
 # Private local memory and generated reports
 data/
 reports/
+
+# Local-only list of private terms used by the release hygiene test
+.private-denylist

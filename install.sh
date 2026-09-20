@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Local WeChat evidence stays owner-only; see install-user.sh for the same rule.
+umask 077
+
 # PEP 668-safe installer for the local-first WSA CLI and MCP server.
 # The project is installed into a repository-local virtual environment so the
 # user's Homebrew/system Python is never modified. The venv can see existing

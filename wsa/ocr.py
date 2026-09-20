@@ -6,10 +6,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
+import tempfile
 import time
 
 from .observations import OCRObservation, observation_from_mapping
+from .settings import secure_directory, secure_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,9 +42,31 @@ OCR_BINARY = BINARY_ROOT / "macos_ocr"
 FRONTMOST_BINARY = BINARY_ROOT / "macos_frontmost_app"
 FRONTMOST_WINDOW_BINARY = BINARY_ROOT / "macos_frontmost_window"
 
+# The watch loop calls these helpers unattended, so every external process is
+# bounded: a hung ``screencapture`` or OCR run must fail the cycle, not stall
+# capture forever.
+SCREENSHOT_TIMEOUT_SECONDS = 30
+OCR_TIMEOUT_SECONDS = 60
+HELPER_TIMEOUT_SECONDS = 10
+SIPS_TIMEOUT_SECONDS = 30
+SWIFT_COMPILE_TIMEOUT_SECONDS = 120
+
 
 class CaptureError(RuntimeError):
     pass
+
+
+def _run(args: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run a helper process with a hard timeout.
+
+    A helper that hangs must end this capture cycle with an error, not block
+    the watch loop forever -- the watcher logs the failure and keeps going.
+    """
+
+    try:
+        return subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise CaptureError(f"{' '.join(args[:2])} timed out after {timeout}s") from exc
 
 
 class OCRText(str):
@@ -133,7 +158,7 @@ def _capture_screenshot_legacy(
     crop_preset: str = "none",
 ) -> Path:
     path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    secure_directory(path.parent)
     args = ["screencapture", "-x", "-o"]
     if mode == "window":
         # ``-W`` opens an interactive picker and cannot be used safely by a
@@ -143,13 +168,15 @@ def _capture_screenshot_legacy(
     elif mode != "screen":
         raise ValueError("mode must be 'screen' or 'window'")
     args.append(str(path))
-    result = subprocess.run(args, text=True, capture_output=True)
+    result = _run(args, timeout=SCREENSHOT_TIMEOUT_SECONDS)
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "screencapture failed")
     region = resolve_crop_region(path, crop=crop, crop_preset=crop_preset)
     if region:
         crop_image(path, region)
-    return path
+    # screencapture (and the sips crop above) write under the process umask;
+    # a chat screenshot must end up owner-only like the rest of the data.
+    return secure_file(path)
 
 
 def ocr_image(image_path: Path | str, *, build: bool = True) -> str:
@@ -163,11 +190,7 @@ def ocr_image_observations(image_path: Path | str, *, build: bool = True) -> tup
     binary = ensure_ocr_helper() if build else OCR_BINARY
     if not binary.exists():
         raise CaptureError(f"OCR helper is not built. Run: swiftc {OCR_SOURCE} -o {OCR_BINARY}")
-    result = subprocess.run(
-        [str(binary), str(image_path)],
-        text=True,
-        capture_output=True,
-    )
+    result = _run([str(binary), str(image_path)], timeout=OCR_TIMEOUT_SECONDS)
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "OCR failed")
     return _parse_ocr_output(result.stdout)
@@ -199,43 +222,65 @@ def _parse_ocr_output(output: str) -> tuple[OCRObservation, ...]:
     )
 
 
+def _require_swiftc() -> str:
+    """Fail with an actionable message instead of a bare FileNotFoundError.
+
+    A PyPI install needs no source checkout, so the Swift helpers are compiled
+    on first use.  Machines without the Xcode Command Line Tools have no
+    ``swiftc`` at all, and that is the most common first-run failure.
+    """
+
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        raise CaptureError(
+            "需要 Xcode Command Line Tools 才能编译 macOS 采集/OCR 组件："
+            "请运行 xcode-select --install 后重试。"
+        )
+    return swiftc
+
+
 def ensure_ocr_helper() -> Path:
     if _needs_build(OCR_SOURCE, OCR_BINARY):
-        OCR_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", str(OCR_SOURCE), "-o", str(OCR_BINARY)],
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise CaptureError(result.stderr.strip() or "swiftc failed")
+        _compile_swift(OCR_SOURCE, OCR_BINARY)
     return OCR_BINARY
 
 
 def ensure_frontmost_helper() -> Path:
     if _needs_build(FRONTMOST_SOURCE, FRONTMOST_BINARY):
-        FRONTMOST_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", str(FRONTMOST_SOURCE), "-o", str(FRONTMOST_BINARY)],
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise CaptureError(result.stderr.strip() or "swiftc failed")
+        _compile_swift(FRONTMOST_SOURCE, FRONTMOST_BINARY)
     return FRONTMOST_BINARY
 
 
 def ensure_frontmost_window_helper() -> Path:
     if _needs_build(FRONTMOST_WINDOW_SOURCE, FRONTMOST_WINDOW_BINARY):
-        FRONTMOST_WINDOW_BINARY.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["swiftc", str(FRONTMOST_WINDOW_SOURCE), "-o", str(FRONTMOST_WINDOW_BINARY)],
-            text=True,
-            capture_output=True,
-        )
+        _compile_swift(FRONTMOST_WINDOW_SOURCE, FRONTMOST_WINDOW_BINARY)
+    return FRONTMOST_WINDOW_BINARY
+
+
+def _compile_swift(source: Path, binary: Path) -> Path:
+    """Compile a Swift helper into place atomically.
+
+    swiftc writes the binary in one shot, so a concurrent build or a compile
+    killed mid-run must never leave a half-written helper at the real path --
+    ``_needs_build`` trusts mtimes and would keep shipping the broken binary.
+    Compile to a temp name beside the target and rename instead; two racing
+    builds each produce a complete binary and the last rename wins.
+    """
+
+    _require_swiftc()
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{binary.name}.", suffix=".tmp", dir=binary.parent)
+    os.close(fd)
+    temp_binary = Path(temp_name)
+    try:
+        result = _run(["swiftc", str(source), "-o", str(temp_binary)], timeout=SWIFT_COMPILE_TIMEOUT_SECONDS)
         if result.returncode != 0:
             raise CaptureError(result.stderr.strip() or "swiftc failed")
-    return FRONTMOST_WINDOW_BINARY
+        os.replace(temp_binary, binary)
+    except BaseException:
+        temp_binary.unlink(missing_ok=True)
+        raise
+    return binary
 
 
 def frontmost_window_id() -> int:
@@ -245,7 +290,7 @@ def frontmost_window_id() -> int:
         binary = ensure_frontmost_window_helper()
     except Exception as exc:
         raise CaptureError(f"frontmost window helper unavailable: {exc}") from exc
-    result = subprocess.run([str(binary)], text=True, capture_output=True)
+    result = _run([str(binary)], timeout=HELPER_TIMEOUT_SECONDS)
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "frontmost window lookup failed")
     try:
@@ -277,10 +322,9 @@ def parse_crop_spec(spec: str) -> CropRegion:
 
 
 def image_size(image_path: Path | str) -> tuple[int, int]:
-    result = subprocess.run(
+    result = _run(
         ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(image_path)],
-        text=True,
-        capture_output=True,
+        timeout=SIPS_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "failed to inspect image size")
@@ -323,7 +367,7 @@ def resolve_crop_region(
 def crop_image(image_path: Path | str, region: CropRegion) -> None:
     path = Path(image_path)
     temp_path = path.with_name(f"{path.stem}.crop{path.suffix}")
-    result = subprocess.run(
+    result = _run(
         [
             "sips",
             "-c",
@@ -336,8 +380,7 @@ def crop_image(image_path: Path | str, region: CropRegion) -> None:
             "--out",
             str(temp_path),
         ],
-        text=True,
-        capture_output=True,
+        timeout=SIPS_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         raise CaptureError(result.stderr.strip() or "failed to crop image")
@@ -369,7 +412,10 @@ def _frontmost_app_from_swift() -> FrontmostAppStatus:
         binary = ensure_frontmost_helper()
     except Exception as exc:
         return FrontmostAppStatus(name=None, method="swift", detail=str(exc))
-    result = subprocess.run([str(binary)], text=True, capture_output=True)
+    try:
+        result = _run([str(binary)], timeout=HELPER_TIMEOUT_SECONDS)
+    except CaptureError as exc:
+        return FrontmostAppStatus(name=None, method="swift", detail=str(exc))
     if result.returncode == 0:
         name = result.stdout.strip()
         if name:
@@ -381,8 +427,8 @@ def _frontmost_app_from_swift() -> FrontmostAppStatus:
 def _frontmost_app_from_osascript() -> FrontmostAppStatus:
     script = 'tell application "System Events" to get name of first application process whose frontmost is true'
     try:
-        result = subprocess.run(["osascript", "-e", script], text=True, capture_output=True)
-    except OSError as exc:
+        result = _run(["osascript", "-e", script], timeout=HELPER_TIMEOUT_SECONDS)
+    except (OSError, CaptureError) as exc:
         return FrontmostAppStatus(name=None, method="osascript", detail=f"osascript unavailable: {exc}")
     if result.returncode == 0:
         name = result.stdout.strip()
@@ -405,6 +451,14 @@ def _validate_region_inside_image(region: CropRegion, size: tuple[int, int]) -> 
 
 
 def _needs_build(source: Path, binary: Path) -> bool:
-    if not binary.exists():
+    try:
+        source_mtime = source.stat().st_mtime
+    except OSError as exc:
+        # A missing helper source means a broken installation; say so instead
+        # of letting the stat failure surface as a bare FileNotFoundError.
+        raise CaptureError(f"Swift 助手源码缺失（安装可能不完整）：{source}") from exc
+    try:
+        binary_mtime = binary.stat().st_mtime
+    except FileNotFoundError:
         return True
-    return source.stat().st_mtime > binary.stat().st_mtime
+    return source_mtime > binary_mtime

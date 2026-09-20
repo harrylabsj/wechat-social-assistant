@@ -1,10 +1,17 @@
+import _env_guard  # noqa: F401 - scrub inherited WSA_* before importing wsa
+
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from wsa.audit import export_local_data
-from wsa.privacy import encrypted_backup_database, purge_expired_captures, redact_text
+from wsa.privacy import (
+    PBKDF2_ITERATIONS,
+    encrypted_backup_database,
+    purge_expired_captures,
+    redact_text,
+)
 from wsa.store import connect, ingest_capture, init_db
 
 
@@ -71,7 +78,21 @@ class PrivacyTests(unittest.TestCase):
             encrypted_backup_database(db_path, encrypted, passphrase="test-passphrase")
             decrypted = root / "decrypted.db"
             subprocess.run(
-                ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass", "stdin", "-in", str(encrypted), "-out", str(decrypted)],
+                [
+                    "openssl",
+                    "enc",
+                    "-d",
+                    "-aes-256-cbc",
+                    "-pbkdf2",
+                    "-iter",
+                    str(PBKDF2_ITERATIONS),
+                    "-pass",
+                    "stdin",
+                    "-in",
+                    str(encrypted),
+                    "-out",
+                    str(decrypted),
+                ],
                 input="test-passphrase\n",
                 text=True,
                 capture_output=True,

@@ -7,7 +7,9 @@
 
 它不读取微信数据库，不破解加密，不注入微信进程，也不会自动发送消息。
 
-项目以 Apache-2.0 开源。源码仓库包含 Hermes Skill、OpenClaw 插件等 Agent 适配器；PyPI 发布包只包含可安装的 `wsa` 代码、Swift 源码和无个人数据的测试 fixture。本地数据库、截图、日志和报告不会进入 Git 或 PyPI。
+项目以 Apache-2.0 开源。源码仓库包含 Hermes Skill、OpenClaw 插件等 Agent 适配器；PyPI 发布包只包含可安装的 `wsa` 代码和 Swift 源码。本地数据库、截图、日志和报告不会进入 Git 或 PyPI。
+
+本地数据按「仅本人可读」创建：数据目录 `0700`，数据库、截图、`settings.json`、日志、报告和导出文件 `0600`。同一台 Mac 上的其他账户无法读取你的聊天记录。
 
 ## 从 PyPI 安装
 
@@ -629,7 +631,16 @@ python3 -m wsa.cli reset --dry-run
 python3 -m wsa.cli reset --yes
 ```
 
-`reset` 只清空本工具的 SQLite 关系记忆和当前/历史 WSA 管理截图目录里的图片，不会删除 `watch.log` 或其他非图片文件。
+`reset` 只清空**这个数据库自己拥有的**数据：SQLite 关系记忆，以及该库 `captures` 表引用、标记为 WSA 管理（`image_managed`）、且没有被其他记录引用的截图。它按记录删除，不按目录删除 —— 用户手工导入的图片、其他数据库的截图、目录里没有任何记录引用的孤儿文件都会保留，`watch.log` 和其他非图片文件同样不动。
+
+`--dry-run` 和实际执行都会打印生效的数据库路径、截图目录和前几个将被删除的文件，确认前请核对目录是否是你预期的那个：
+
+```text
+dry-run: people=12 captures=63 ... screenshots=63
+db: /Users/you/Library/Application Support/wechat-social-assistant/data/social.db
+captures dir: /Users/you/Library/Application Support/wechat-social-assistant/data/captures
+  screenshot: .../wechat-20260526-222119.png
+```
 
 连续处于非微信前台时，`watch` 会自动降低重复 skip 日志频率。默认每 30 次重复状态写一次心跳；如果想调得更密或更安静：
 

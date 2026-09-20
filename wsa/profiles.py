@@ -21,6 +21,45 @@ ORG_RE = re.compile(
 )
 ORG_CONTEXT_RE = re.compile(r"(我是|来自|就职|任职|加入|供职|创始|合伙|负责|@)")
 CHINESE_NAME_RE = re.compile(r"^[\u4e00-\u9fff]{2,4}$")
+# Standalone short replies that OCR delivers as clean 2-4 character Han
+# lines.  Once a direct chat shows identity context, every one of these used
+# to be accepted as a "name hint" -- and then deleted from the profile
+# content as a duplicate of that hint.
+CONVERSATION_FILLER_LINES = frozenset(
+    {
+        "好的",
+        "好嘞",
+        "好哒",
+        "好的呢",
+        "好的好的",
+        "好呀",
+        "好啊",
+        "收到",
+        "嗯嗯",
+        "嗯嗯嗯",
+        "嗯呢",
+        "哦哦",
+        "噢噢",
+        "谢谢",
+        "多谢",
+        "感谢",
+        "辛苦",
+        "没有",
+        "不是",
+        "可以",
+        "不行",
+        "不用",
+        "不要",
+        "对对对",
+        "是的呢",
+        "哈哈",
+        "哈哈哈",
+        "哈哈哈哈",
+    }
+)
+# No Chinese name ends in a sentence-final particle, but plenty of short
+# replies do; this catches the long tail beyond the fixed set above.
+FILLER_PARTICLE_SUFFIX_RE = re.compile(r"[\u4e00-\u9fff]{1,3}(?:了|的|吧|哦|呀|嘛|呢|啦|呗|咯|啊)$")
 LATIN_NAME_HINT_RE = re.compile(
     r"^([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,2})(?:\s+[A-Za-z0-9]{2,8})?$"
 )
@@ -710,8 +749,16 @@ def _has_identity_context(lines: list[str], *, organizations: list[str]) -> bool
     )
 
 
+def _looks_like_conversational_filler(cleaned: str) -> bool:
+    if cleaned in CONVERSATION_FILLER_LINES:
+        return True
+    return bool(FILLER_PARTICLE_SUFFIX_RE.fullmatch(cleaned))
+
+
 def _extract_chinese_name_hint(line: str) -> str | None:
     cleaned = clean_line(line)
+    if _looks_like_conversational_filler(cleaned):
+        return None
     if CHINESE_NAME_RE.fullmatch(cleaned) and not ORG_RE.fullmatch(cleaned):
         return cleaned
     return None

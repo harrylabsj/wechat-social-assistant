@@ -18,12 +18,15 @@ import subprocess
 import tempfile
 from typing import Any
 
-from .settings import capture_storage_roots
-from .store import connect, init_db, now_iso
+from .settings import capture_storage_roots, ensure_output_directory, secure_file
+from .store import connect, init_db, now_iso, owned_capture_images
+from .timefmt import parse_datetime
 
 
 DEFAULT_RETENTION_DAYS = 90
 DEFAULT_PASSPHRASE_ENV = "WSA_BACKUP_PASSPHRASE"
+PASSPHRASE_ENV_PREFIX = "WSA_"
+PBKDF2_ITERATIONS = 600_000
 
 _REDACTION_PATTERNS = (
     (re.compile(r"(?<!\d)(?:\+?86[ -]?)?1[3-9]\d{9}(?!\d)"), "[PHONE]"),
@@ -125,7 +128,7 @@ def purge_expired_captures(
             (cutoff,),
         ).fetchall()
         capture_ids = [int(row["id"]) for row in rows]
-        screenshots = _owned_unshared_images(conn, rows, capture_storage_roots(db))
+        screenshots = owned_capture_images(conn, capture_ids, managed_roots=capture_storage_roots(db))
         if not dry_run and capture_ids:
             placeholders = ", ".join("?" for _ in capture_ids)
             conn.execute(f"delete from captures where id in ({placeholders})", capture_ids)
@@ -164,13 +167,18 @@ def encrypted_backup_database(
     target = Path(encrypted_path).expanduser().resolve(strict=False)
     if target.exists() and not overwrite:
         raise FileExistsError(f"encrypted backup already exists: {target}")
+    if not str(passphrase_env).startswith(PASSPHRASE_ENV_PREFIX):
+        # An MCP client picking the variable could otherwise name one whose
+        # value it already knows (LANG, USER), producing a backup that only
+        # looks encrypted.
+        raise ValueError(f"passphrase_env must start with {PASSPHRASE_ENV_PREFIX}")
     secret = passphrase if passphrase is not None else os.environ.get(passphrase_env)
     if not secret:
         raise ValueError(f"set {passphrase_env} or passphrase explicitly before encrypting a backup")
     openssl = shutil.which("openssl")
     if not openssl:
         raise RuntimeError("openssl is required for encrypted backups")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_output_directory(target.parent)
     fd, temporary_plaintext = tempfile.mkstemp(prefix="wsa-backup-", suffix=".db")
     os.close(fd)
     plain = Path(temporary_plaintext)
@@ -178,6 +186,10 @@ def encrypted_backup_database(
     try:
         from .store import backup_database
 
+        # Pre-create the ciphertext side file owner-only: openssl writes into
+        # the existing file instead of creating one under the process umask,
+        # so an interrupted run never leaves a group/world-readable backup.
+        os.close(os.open(temporary_output, os.O_CREAT | os.O_TRUNC, 0o600))
         backup_database(source, plain, overwrite=True)
         result = subprocess.run(
             [
@@ -185,6 +197,10 @@ def encrypted_backup_database(
                 "enc",
                 "-aes-256-cbc",
                 "-pbkdf2",
+                # OpenSSL's default is 10000 rounds, far below what a
+                # passphrase-derived key needs today.
+                "-iter",
+                str(PBKDF2_ITERATIONS),
                 "-salt",
                 "-pass",
                 "stdin",
@@ -206,49 +222,20 @@ def encrypted_backup_database(
     finally:
         plain.unlink(missing_ok=True)
         temporary_output.unlink(missing_ok=True)
-    return target
+    return secure_file(target)
 
 
 def _cutoff_iso(retention_days: int, as_of: str | None) -> str:
     if as_of:
-        value = str(as_of).replace("Z", "+00:00")
         try:
-            reference = datetime.fromisoformat(value)
+            # Shared parser: a naive timestamp means local time here exactly as
+            # it does for feedback and suggestions, so a cutoff is never off by
+            # the local UTC offset.
+            reference = parse_datetime(str(as_of))
         except ValueError as exc:
             raise ValueError("as_of must be an ISO timestamp") from exc
     else:
         reference = datetime.now(timezone.utc)
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
     return (reference.astimezone(timezone.utc) - timedelta(days=retention_days)).isoformat(timespec="seconds")
 
 
-def _owned_unshared_images(conn, rows, managed_roots: tuple[Path, ...]) -> list[Path]:
-    candidates: list[Path] = []
-    capture_ids = [int(row["id"]) for row in rows]
-    if not capture_ids:
-        return candidates
-    placeholders = ", ".join("?" for _ in capture_ids)
-    for row in rows:
-        if not row["image_path"] or not bool(row["image_managed"]):
-            continue
-        path = Path(str(row["image_path"])).expanduser().resolve(strict=False)
-        if not any(_is_relative_to(path, root) for root in managed_roots):
-            continue
-        references = int(
-            conn.execute(
-                f"select count(*) from captures where image_path = ? and id not in ({placeholders})",
-                [str(row["image_path"]), *capture_ids],
-            ).fetchone()[0]
-        )
-        if references == 0 and path.is_file():
-            candidates.append(path)
-    return candidates
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root.expanduser().resolve(strict=False))
-    except (OSError, ValueError):
-        return False
-    return True

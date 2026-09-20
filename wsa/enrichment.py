@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .store import connect, init_db, now_iso
 
@@ -72,6 +72,69 @@ def record_contact_enrichment(
         conn.commit()
     records = list_contact_enrichments(db_path, person_name=name, limit=1)
     return records[0]
+
+
+def update_contact_enrichment_fields(
+    db_path: Path | str,
+    *,
+    person_name: str,
+    update: Callable[[dict[str, str]], dict[str, str]],
+) -> ContactEnrichment | None:
+    """Merge into a contact's fields atomically.
+
+    The dashboard and an Obsidian import can write the same row at the same
+    time.  Reading a snapshot on one connection and upserting it on another
+    makes the last writer silently discard the first writer's fields, so the
+    read-modify-write runs inside one ``BEGIN IMMEDIATE`` transaction here:
+    the callback always sees the currently committed fields.
+
+    The callback receives the stored non-empty fields and returns the new
+    fields.  Returning an empty dict deletes the record when one exists and
+    is a no-op otherwise.  ``source``/``raw_text``/``file_path`` of an
+    existing record are preserved; only ``fields_json`` changes.
+    """
+
+    init_db(db_path)
+    name = person_name.strip()
+    if not name:
+        raise ValueError("person_name is required")
+    timestamp = now_iso()
+    with connect(db_path) as conn:
+        conn.execute("begin immediate")
+        row = conn.execute(
+            "select fields_json from contact_enrichments where person_name = ?", (name,)
+        ).fetchone()
+        existing: dict[str, str] = {}
+        if row is not None:
+            try:
+                payload = json.loads(row["fields_json"] or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+            if isinstance(payload, dict):
+                existing = {str(key): str(value) for key, value in payload.items() if value}
+        merged = update(existing)
+        if not merged:
+            if existing:
+                conn.execute("delete from contact_enrichments where person_name = ?", (name,))
+                conn.commit()
+            else:
+                conn.commit()
+            return None
+        _ensure_person(conn, name, timestamp)
+        conn.execute(
+            """
+            insert into contact_enrichments
+            (person_name, source, fields_json, raw_text, file_path, imported_at, updated_at)
+            values (?, 'dashboard', ?, '', null, ?, ?)
+            on conflict(person_name) do update set
+                fields_json = excluded.fields_json,
+                updated_at = excluded.updated_at
+            """,
+            (name, json.dumps(merged, ensure_ascii=False, sort_keys=True), timestamp, timestamp),
+        )
+        conn.commit()
+    records = list_contact_enrichments(db_path, person_name=name, limit=1)
+    return records[0] if records else None
 
 
 def list_contact_enrichments(

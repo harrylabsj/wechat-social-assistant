@@ -198,7 +198,29 @@ def _detect_watch_processes(
     current_pid: int | None = None,
     db_path: Path | str | None = None,
 ) -> tuple[int, ...]:
-    pids: list[int] = []
+    return tuple(
+        pid
+        for pid, _ in _detect_watch_process_details(
+            process_rows, current_pid=current_pid, db_path=db_path
+        )
+    )
+
+
+def _detect_watch_process_details(
+    process_rows: list[str],
+    *,
+    current_pid: int | None = None,
+    db_path: Path | str | None = None,
+) -> tuple[tuple[int, Path | None], ...]:
+    """Return matching watch processes with the database each one names.
+
+    A process started without ``--db`` reports ``None``: its database cannot
+    be read from the command line, so it matches any selection.  Callers that
+    stop processes must surface that ambiguity -- with ``WSA_DB`` exported by
+    the installer, most real watchers carry no ``--db`` at all.
+    """
+
+    details: list[tuple[int, Path | None]] = []
     current = current_pid or os.getpid()
     selected_db = _normalize_process_path(db_path) if db_path is not None else None
     for row in process_rows:
@@ -212,8 +234,21 @@ def _detect_watch_processes(
             command_db = _watch_command_db_path(command)
             if selected_db is not None and command_db is not None and command_db != selected_db:
                 continue
-            pids.append(pid)
-    return tuple(pids)
+            details.append((pid, command_db))
+    return tuple(details)
+
+
+def watch_process_details(
+    *,
+    process_rows: list[str] | None = None,
+    current_pid: int | None = None,
+    db_path: Path | str | None = None,
+) -> tuple[tuple[int, Path | None], ...]:
+    return _detect_watch_process_details(
+        _process_rows() if process_rows is None else process_rows,
+        current_pid=current_pid or os.getpid(),
+        db_path=db_path,
+    )
 
 
 def stop_watch_processes(
@@ -232,9 +267,17 @@ def stop_watch_processes(
     )
     if dry_run:
         return pids
+    stopped: list[int] = []
     for pid in pids:
-        kill_fn(pid, sig)
-    return pids
+        try:
+            kill_fn(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            # The process may exit between the ps scan and the kill, or belong
+            # to another user.  Skip it instead of abandoning the remaining
+            # watchers mid-loop.
+            continue
+        stopped.append(pid)
+    return tuple(stopped)
 
 
 def _count_screenshots(path: Path) -> int:

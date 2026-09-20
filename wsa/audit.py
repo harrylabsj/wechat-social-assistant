@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from .privacy import redact_payload
-from .settings import capture_storage_roots, resolve_captures_dir
-from .store import connect, init_db, now_iso
+from .settings import (
+    capture_storage_roots,
+    ensure_output_directory,
+    resolve_captures_dir,
+    secure_file,
+)
+from .store import connect, init_db, now_iso, owned_capture_images
 
 
 AUDIT_TABLES = (
@@ -134,8 +141,20 @@ def export_local_data(
         "redacted": bool(redact),
         "tables": tables,
     }
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Write through a 0600 temp file and rename: a crash mid-write must not
+    # leave an unredacted export readable by the group/other bits, and the
+    # user-chosen parent directory must keep its own permissions.
+    ensure_output_directory(out.parent)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{out.name}.", suffix=".tmp", dir=out.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+        temporary = Path(temporary_name)
+        temporary.replace(out)
+    except BaseException:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+    secure_file(out)
     return ExportDataResult(out_path=out, generated_at=generated_at, table_counts=counts)
 
 
@@ -262,53 +281,7 @@ def _capture_ids(conn, person_ids: list[int]) -> list[int]:
 
 
 def _unshared_capture_image_paths(conn, capture_ids: list[int], *, managed_roots: tuple[Path, ...]) -> list[Path]:
-    if not capture_ids:
-        return []
-    placeholders = ", ".join("?" for _ in capture_ids)
-    rows = conn.execute(
-        f"""
-        select distinct image_path, image_managed
-        from captures
-        where id in ({placeholders})
-          and image_path is not null
-          and image_path != ''
-        """,
-        capture_ids,
-    ).fetchall()
-    result: list[Path] = []
-    for row in rows:
-        if not bool(row["image_managed"]):
-            # The explicit ownership bit wins over path heuristics. This
-            # protects a user-imported image that happens to live under
-            # data/captures.
-            continue
-        image_path = str(row["image_path"])
-        path = Path(image_path).expanduser().resolve(strict=False)
-        if not any(_is_relative_to(path, root) for root in managed_roots):
-            # Imported/user-owned images are references, not files managed by WSA.
-            continue
-        other_refs = int(
-            conn.execute(
-                f"""
-                select count(*)
-                from captures
-                where image_path = ?
-                  and id not in ({placeholders})
-                """,
-                [image_path, *capture_ids],
-            ).fetchone()[0]
-        )
-        if other_refs == 0 and path.is_file():
-            result.append(path)
-    return result
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root.expanduser().resolve(strict=False))
-    except (OSError, ValueError):
-        return False
-    return True
+    return owned_capture_images(conn, capture_ids, managed_roots=managed_roots)
 
 
 def _count_by_ids(conn, table: str, column: str, ids: list[int]) -> int:

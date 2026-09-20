@@ -24,6 +24,15 @@ SEND_MODES = ("manual", "computer_use")
 STATUSES = ("draft", "approved", "dismissed", "sent")
 ACTIONS = ("approve", "dismiss", "edit", "mark_sent")
 
+# A draft moves forward only: sent and dismissed close the loop, so a host
+# cannot silently resurrect a message that was already sent or rejected.
+ACTION_ALLOWED_FROM_STATUS = {
+    "approve": {"draft"},
+    "mark_sent": {"draft", "approved"},
+    "dismiss": {"draft", "approved"},
+    "edit": {"draft", "approved"},
+}
+
 
 @dataclass(frozen=True)
 class OutreachDraft:
@@ -152,6 +161,13 @@ def update_outreach_draft(
         ).fetchone()
         if row is None:
             raise ValueError(f"outreach draft not found: {draft_id}")
+        status = str(row["status"])
+        allowed = ACTION_ALLOWED_FROM_STATUS[str(action)]
+        if status not in allowed:
+            raise ValueError(
+                f"cannot {action} a {status} draft: allowed from "
+                f"{', '.join(sorted(allowed))}"
+            )
         updates: list[str] = ["updated_at = ?"]
         params: list[Any] = [timestamp]
         if action == "approve":

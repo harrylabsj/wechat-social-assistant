@@ -20,6 +20,8 @@ class ObsidianImportResult:
     scanned_count: int
     parsed_count: int
     imported_count: int
+    skipped_unreadable_count: int = 0
+    skipped_duplicate_count: int = 0
     dry_run: bool = False
 
 
@@ -45,10 +47,30 @@ def import_obsidian_enrichments(
 ) -> ObsidianImportResult:
     people_dir = Path(vault) / "社交圈" / "人脉"
     files = _contact_files(people_dir)
-    parsed_contacts = [parse_obsidian_contact_file(path) for path in files]
+    parsed_contacts: list[ParsedObsidianContact] = []
+    skipped_unreadable = 0
+    for path in files:
+        try:
+            parsed_contacts.append(parse_obsidian_contact_file(path))
+        except (OSError, UnicodeDecodeError):
+            # One non-UTF-8 (or unreadable) note must not abort the whole
+            # import; the rest of the vault still syncs.
+            skipped_unreadable += 1
     importable = [contact for contact in parsed_contacts if contact.fields]
+    # Two notes resolving to the same person would each fully replace
+    # contact_enrichments for that name, silently dropping the earlier
+    # note's fields.  Keep the first (sorted path order) and report the rest.
+    deduped: list[ParsedObsidianContact] = []
+    seen_names: set[str] = set()
+    skipped_duplicate = 0
+    for contact in importable:
+        if contact.person_name in seen_names:
+            skipped_duplicate += 1
+            continue
+        seen_names.add(contact.person_name)
+        deduped.append(contact)
     if not dry_run:
-        for contact in importable:
+        for contact in deduped:
             record_contact_enrichment(
                 db_path,
                 person_name=contact.person_name,
@@ -59,8 +81,10 @@ def import_obsidian_enrichments(
             )
     return ObsidianImportResult(
         scanned_count=len(files),
-        parsed_count=len(importable),
-        imported_count=0 if dry_run else len(importable),
+        parsed_count=len(deduped),
+        imported_count=0 if dry_run else len(deduped),
+        skipped_unreadable_count=skipped_unreadable,
+        skipped_duplicate_count=skipped_duplicate,
         dry_run=dry_run,
     )
 

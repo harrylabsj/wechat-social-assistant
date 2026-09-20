@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -107,6 +108,11 @@ class WeChatArchiveRecord:
 
 
 def default_wechat_archive_manifest() -> Path:
+    # The default points at this machine's archive; another environment can
+    # redirect it with WSA_ARCHIVE_MANIFEST instead of editing the source.
+    configured = os.environ.get("WSA_ARCHIVE_MANIFEST")
+    if configured:
+        return Path(configured).expanduser()
     return (
         Path.home()
         / "Library"
@@ -295,6 +301,12 @@ def _record_from_row(
 
 
 def _insert_archive_source(db_path: Path | str, record: WeChatArchiveRecord) -> bool:
+    # Unmatched files are filed under a topic bucket ("项目线索：…"), which is
+    # a label, not a person.  Their people row is created with a NULL
+    # last_interaction_at and never gains one, so the suggestion/profile
+    # pipeline -- which selects on last_interaction_at -- keeps treating it
+    # as a filing bucket while the sources stay browsable and auditable.
+    matched = bool(record.fields.get("matched_contact"))
     with connect(db_path) as conn:
         conn.execute(
             """
@@ -310,7 +322,12 @@ def _insert_archive_source(db_path: Path | str, record: WeChatArchiveRecord) -> 
                     else people.last_interaction_at
                 end
             """,
-            (record.person_name, record.imported_at, record.imported_at, record.occurred_at),
+            (
+                record.person_name,
+                record.imported_at,
+                record.imported_at,
+                record.occurred_at if matched else None,
+            ),
         )
         cursor = conn.execute(
             """
