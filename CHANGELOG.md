@@ -2,6 +2,14 @@
 
 All notable changes to WeChat Social Assistant are documented here.
 
+## 1.5.1 - 2026-09-24
+
+Release-line reconciliation: the v1.4.5 security and data-safety tree is
+published to PyPI as 1.5.1 (PyPI 1.5.0 was an intermediate build published
+from an uncommitted working tree on 2026-09-14; its changes are superseded
+by the v1.4.5 line, and PyPI releases are immutable so a new version number
+is required). No functional change versus v1.4.5.
+
 ## 1.4.5 - 2026-09-20
 
 Security and data-safety release. Upgrade is strongly recommended.
